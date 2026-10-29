@@ -7,6 +7,7 @@ const ERROR_TITLES: Record<GitErrorKind, string> = {
   notRepository: "不是 Git 仓库",
   invalidPath: "路径不可用",
   invalidInput: "输入无效",
+  identityMissing: "提交者身份未配置",
   worktreeDirty: "有未提交修改",
   commandFailed: "Git 操作失败",
   timeout: "连接超时",

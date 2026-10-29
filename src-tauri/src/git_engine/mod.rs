@@ -181,8 +181,12 @@ pub fn discard_file(
     actions::discard_file(worktree, path, original_path)
 }
 
-pub fn staged_diffs(worktree: &std::path::Path) -> Result<Vec<FileDiff>, GitError> {
-    actions::staged_diffs(worktree)
+pub fn staged_diffs(
+    worktree: &std::path::Path,
+    offset: u32,
+    limit: u32,
+) -> Result<Vec<FileDiff>, GitError> {
+    actions::staged_diffs(worktree, offset, limit)
 }
 
 pub fn commit(

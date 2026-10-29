@@ -3,6 +3,7 @@ export type GitErrorKind =
   | "notRepository"
   | "invalidPath"
   | "invalidInput"
+  | "identityMissing"
   | "worktreeDirty"
   | "commandFailed"
   | "timeout"

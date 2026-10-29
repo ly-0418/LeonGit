@@ -520,6 +520,11 @@ export default function App() {
       setScope("worktree");
       setHistoryRefreshToken((token) => token + 1);
       refreshRefs();
+      setNotice({
+        tone: "success",
+        title: "提交成功",
+        message: `${result.shortOid} 已写入本地仓库。`,
+      });
     },
     [adopt, refreshRefs],
   );
@@ -1229,6 +1234,7 @@ export default function App() {
             snapshot={snapshot}
             onOpenChange={setCommitOpen}
             onCommitted={handleCommitted}
+            onOpenRepositorySettings={() => setSettingsOpen(true)}
             onCommitAndPush={handleCommitAndPush}
           />
           <AmendCommitDialog

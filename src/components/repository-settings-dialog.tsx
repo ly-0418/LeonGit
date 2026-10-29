@@ -186,6 +186,15 @@ export function RepositorySettingsDialog({
             className="flex min-h-0 flex-1 flex-col gap-4"
           >
             <DialogBody className="space-y-4">
+              {(!config?.userName || !config?.userEmail) && (
+                <div className="flex items-start gap-2 rounded-lg border border-[var(--warning-border)] bg-[var(--warning-surface)] px-3 py-2.5 text-[9.5px] leading-relaxed text-[var(--warning)]">
+                  <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+                  <span>
+                    提交前必须填写用户名和邮箱；缺失时 Git 会拒绝提交。保存只写入当前仓库的
+                    .git/config，不会修改全局配置。
+                  </span>
+                </div>
+              )}
               <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between gap-2">
@@ -194,6 +203,7 @@ export function RepositorySettingsDialog({
                     className="text-[10px] font-medium text-foreground/65"
                   >
                     user.name
+                    <span className="ml-1 font-normal text-rose/50">必填</span>
                   </label>
                   <SourceBadge source={config?.userName?.source} />
                 </div>
@@ -217,6 +227,7 @@ export function RepositorySettingsDialog({
                     className="text-[10px] font-medium text-foreground/65"
                   >
                     user.email
+                    <span className="ml-1 font-normal text-rose/50">必填</span>
                   </label>
                   <SourceBadge source={config?.userEmail?.source} />
                 </div>
@@ -287,7 +298,10 @@ export function RepositorySettingsDialog({
               >
                 关闭
               </Button>
-              <Button type="submit" disabled={isSaving || !dirty}>
+              <Button
+                type="submit"
+                disabled={isSaving || !dirty || !name.trim() || !email.trim()}
+              >
                 {isSaving ? (
                   <Loader2 className="animate-spin" />
                 ) : (

@@ -247,10 +247,14 @@ pub async fn discard_file(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub async fn get_staged_diffs(repo_path: String) -> Result<Vec<FileDiff>, GitError> {
+pub async fn get_staged_diffs(
+    repo_path: String,
+    offset: u32,
+    limit: u32,
+) -> Result<Vec<FileDiff>, GitError> {
     run_blocking(move || {
         let worktree = git_engine::safe_repo_path(&repo_path)?;
-        git_engine::staged_diffs(&worktree)
+        git_engine::staged_diffs(&worktree, offset, limit)
     })
     .await
 }

@@ -29,6 +29,7 @@ const GIT_ERROR_KINDS: readonly GitErrorKind[] = [
   "notRepository",
   "invalidPath",
   "invalidInput",
+  "identityMissing",
   "worktreeDirty",
   "commandFailed",
   "timeout",
@@ -233,8 +234,12 @@ export function discardFile(
   });
 }
 
-export function getStagedDiffs(repoPath: string): Promise<FileDiff[]> {
-  return invoke<FileDiff[]>("get_staged_diffs", { repoPath });
+export function getStagedDiffs(
+  repoPath: string,
+  offset: number,
+  limit: number,
+): Promise<FileDiff[]> {
+  return invoke<FileDiff[]>("get_staged_diffs", { repoPath, offset, limit });
 }
 
 export interface CommitAuthor {

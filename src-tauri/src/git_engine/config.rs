@@ -54,6 +54,37 @@ pub(crate) fn write_identity(
     read(worktree)
 }
 
+/// Commit and annotated-tag operations need a committer identity. Check both
+/// the repository-local and inherited values before Git prints a generic
+/// "Author identity unknown" failure.
+pub(crate) fn ensure_identity(worktree: &Path) -> Result<(), GitError> {
+    let name = read_value(worktree, "user.name")?;
+    let email = read_value(worktree, "user.email")?;
+    let name_missing = name
+        .as_ref()
+        .map(|value| value.value.trim().is_empty())
+        .unwrap_or(true);
+    let email_missing = email
+        .as_ref()
+        .map(|value| value.value.trim().is_empty())
+        .unwrap_or(true);
+
+    if !name_missing && !email_missing {
+        return Ok(());
+    }
+
+    let missing = match (name_missing, email_missing) {
+        (true, true) => "user.name 与 user.email",
+        (true, false) => "user.name",
+        (false, true) => "user.email",
+        (false, false) => unreachable!(),
+    };
+
+    Err(GitError::identity_missing(format!(
+        "未配置提交者身份：缺少 {missing}。请点击左栏仓库卡片右上角的齿轮，打开“仓库配置”，填写用户名和邮箱后保存；这些值只写入当前仓库的 .git/config，不修改全局 Git 配置。也可以在终端执行 `git config --local user.name \"你的名字\"` 和 `git config --local user.email \"you@example.com\"`，然后回到客户端重试。"
+    )))
+}
+
 fn read_value(worktree: &Path, key: &str) -> Result<Option<ConfigValue>, GitError> {
     let local = run_git(worktree, ["config", "--local", "--get", key])?;
     if local.status.success() {
@@ -149,5 +180,38 @@ mod tests {
             validate_identity_value("用户名", "Leon Chen").expect("valid identity"),
             "Leon Chen"
         );
+    }
+
+    #[test]
+    fn detects_missing_commit_identity() {
+        use std::fs;
+        use std::process::Command;
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let repo = temp.path().join("identity repo");
+        fs::create_dir(&repo).expect("repo dir");
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .current_dir(&repo)
+                .args(args)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output()
+                .expect("git");
+            assert!(
+                output.status.success(),
+                "git {:?}: {}",
+                args,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["config", "--local", "user.name", "Leon"]);
+        git(&["config", "--local", "user.email", "leon@example.com"]);
+        ensure_identity(&repo).expect("complete identity");
+
+        git(&["config", "--local", "user.name", ""]);
+        let error = ensure_identity(&repo).expect_err("empty name must be rejected");
+        assert!(error.message.contains("未配置提交者身份"));
+        assert!(error.message.contains("user.name"));
     }
 }

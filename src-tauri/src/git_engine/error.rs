@@ -9,6 +9,7 @@ pub enum GitErrorKind {
     NotRepository,
     InvalidPath,
     InvalidInput,
+    IdentityMissing,
     WorktreeDirty,
     CommandFailed,
     Timeout,
@@ -56,6 +57,10 @@ impl GitError {
 
     pub fn worktree_dirty(message: impl Into<String>) -> Self {
         Self::new(GitErrorKind::WorktreeDirty, message)
+    }
+
+    pub fn identity_missing(message: impl Into<String>) -> Self {
+        Self::new(GitErrorKind::IdentityMissing, message)
     }
 
     pub fn command_failed(message: impl Into<String>) -> Self {
