@@ -203,6 +203,17 @@ cargo tauri build --no-bundle
   - 超时返回类型化 `timeout` 错误，界面显示“连接超时”，不会把 Git 原始输出透出。
 - 本地 Git 操作不设置网络超时。
 
+### 网络代理
+
+- Windows 上客户端会自动读取系统**静态代理**（`ProxyEnable` / `ProxyServer`），并只为 Fetch / Pull / Push / Clone 注入 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`；本地 Git 命令不受影响。
+- 支持 `host:port`、`http=...;https=...` 与 `socks=...` 形式；系统旁路列表会转换为 `NO_PROXY`，`<local>` / `127.*` 等本机地址默认直连。
+- 已显式设置的 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 环境变量或 Git 的 `http.proxy` 优先，不会被覆盖。
+- 仅支持固定代理；PAC / 自动配置脚本（AutoConfigURL）无法同步求值，此时请关闭 PAC 使用固定代理，或手动配置：
+  ```bash
+  git config --global http.https://github.com.proxy http://127.0.0.1:7897
+  ```
+- 客户端不读取、不保存代理凭据；代理连接仍由 Git / libcurl 处理。
+
 ![右下角成功与失败通知堆叠](docs/stage-5-notifications.png)
 
 ![网络无响应自动断开](docs/stage-5-timeout.png)

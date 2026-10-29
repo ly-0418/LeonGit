@@ -11,6 +11,7 @@ mod file_content;
 mod hunk;
 mod log;
 mod merge;
+mod proxy;
 mod redact;
 mod reflog;
 mod remotes;

@@ -1661,6 +1661,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tempfile",
+ "winreg",
 ]
 
 [[package]]

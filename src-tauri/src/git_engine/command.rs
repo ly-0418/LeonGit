@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use std::os::windows::process::CommandExt;
 
 use super::error::GitError;
+use super::proxy;
 use super::redact;
 
 #[cfg(windows)]
@@ -103,6 +104,7 @@ where
     S: AsRef<OsStr>,
 {
     let mut command = git_command(cwd);
+    proxy::apply_to(&mut command);
     command.args(args);
     run_command_with_timeout(command, REMOTE_IDLE_TIMEOUT, REMOTE_MAX_TIMEOUT)
 }
