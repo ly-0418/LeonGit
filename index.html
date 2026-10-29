@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f7f5f0" />
+    <meta name="color-scheme" content="light" />
+    <script>
+      (() => {
+        try {
+          const theme =
+            window.localStorage.getItem("leongit:theme") === "dark"
+              ? "dark"
+              : "light";
+          const root = document.documentElement;
+          root.classList.toggle("dark", theme === "dark");
+          root.dataset.theme = theme;
+          root.style.colorScheme = theme;
+          const metaTheme = document.querySelector('meta[name="theme-color"]');
+          const metaScheme = document.querySelector('meta[name="color-scheme"]');
+          if (metaTheme) {
+            metaTheme.setAttribute("content", theme === "dark" ? "#090b0e" : "#f7f5f0");
+          }
+          if (metaScheme) {
+            metaScheme.setAttribute("content", theme);
+          }
+
+          const rawScale = window.localStorage.getItem("leongit:font-scale");
+          const parsedScale = rawScale ? Number(rawScale) : 1.25;
+          const scale = Number.isFinite(parsedScale)
+            ? Math.min(1.75, Math.max(1.125, parsedScale))
+            : 1.25;
+          root.style.setProperty("--display-scale", String(scale));
+          root.dataset.fontScale = String(scale);
+          window.__leongitBootTheme = theme;
+          window.__leongitBootScale = scale;
+        } catch {
+          document.documentElement.dataset.theme = "light";
+          window.__leongitBootTheme = "light";
+          window.__leongitBootScale = 1.25;
+        }
+      })();
+    </script>
+    <title>LeonGit</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

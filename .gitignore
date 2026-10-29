@@ -1,0 +1,18 @@
+node_modules
+dist
+dist-ssr
+*.local
+.env
+.env.*
+!.env.example
+
+src-tauri/target
+src-tauri/gen
+
+# Runtime data created by the portable build next to the executable.
+Data
+WebView2Data
+
+.DS_Store
+Thumbs.db
+*.log
