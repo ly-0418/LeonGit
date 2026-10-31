@@ -38,6 +38,7 @@ import {
 } from "@/lib/git-api";
 import { changeBadgeClass, CHANGE_LABELS } from "@/lib/changes";
 import { formatCount } from "@/lib/format";
+import { repoStateInfo } from "@/lib/repo-state";
 import type {
   CommitDetail,
   CommitPushResult,
@@ -50,9 +51,11 @@ import type {
 interface CommitDialogProps {
   open: boolean;
   snapshot: RepositorySnapshot;
+  initialMessage?: string | null;
   onOpenChange: (open: boolean) => void;
   onCommitted: (result: CommitResult) => void;
   onOpenRepositorySettings: () => void;
+  onCreateDetachedBranch: () => void;
   onCommitAndPush: (
     title: string,
     body: string,
@@ -69,9 +72,11 @@ const DEFAULT_LEFT_PANE = 380;
 export function CommitDialog({
   open,
   snapshot,
+  initialMessage,
   onOpenChange,
   onCommitted,
   onOpenRepositorySettings,
+  onCreateDetachedBranch,
   onCommitAndPush,
 }: CommitDialogProps) {
   const [title, setTitle] = useState("");
@@ -99,8 +104,26 @@ export function CommitDialog({
   } | null>(null);
 
   const stagedFiles = snapshot.files.staged;
+  // Keyed by the staged file set, not just its size: unstaging one file and
+  // staging another keeps the length constant but changes the diff.
+  const stagedSignature = stagedFiles
+    .map((file) => `${file.path}:${file.change}:${file.originalPath ?? ""}`)
+    .join("\u0001");
+  const stateInfo = repoStateInfo(snapshot.repoState);
+  const stagedEmpty = stagedFiles.length === 0;
+  const titleEmpty = title.trim().length === 0;
   const canSubmit =
-    title.trim().length > 0 && stagedFiles.length > 0 && !isSubmitting;
+    !titleEmpty &&
+    !stagedEmpty &&
+    !isSubmitting &&
+    !stateInfo.blocksCommit;
+  const validationMessage = stagedEmpty
+    ? "没有已暂存的变更"
+    : titleEmpty
+      ? "提交消息不能为空"
+      : stateInfo.blocksCommit
+        ? `当前${stateInfo.label}，不能创建普通提交`
+        : null;
 
   useEffect(() => {
     if (!open) {
@@ -108,8 +131,10 @@ export function CommitDialog({
     }
 
     let cancelled = false;
-    setTitle("");
-    setBody("");
+    const message = initialMessage?.trim() ?? "";
+    const [initialTitle, ...initialBody] = message.split("\n");
+    setTitle(initialTitle ?? "");
+    setBody(initialBody.join("\n").trim());
     setReusedAuthor(null);
     setReuseAuthor(false);
     setReusedCommit(null);
@@ -145,7 +170,7 @@ export function CommitDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, reloadToken, snapshot.path, stagedFiles.length]);
+  }, [initialMessage, open, reloadToken, snapshot.path, stagedSignature]);
 
   const loadMoreDiffs = async () => {
     if (isLoadingMore || !hasMoreDiffs) {
@@ -303,6 +328,22 @@ export function CommitDialog({
     }
   };
 
+  const handleFormKeyDown = (event: KeyboardEvent<HTMLFormElement>) => {
+    if (
+      (event.metaKey || event.ctrlKey) &&
+      event.key === "Enter"
+    ) {
+      event.preventDefault();
+      if (!canSubmit) {
+        if (titleEmpty) {
+          document.getElementById("commit-title")?.focus();
+        }
+        return;
+      }
+      void handleSubmit();
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
@@ -322,6 +363,7 @@ export function CommitDialog({
 
         <form
           onSubmit={handleSubmit}
+          onKeyDown={handleFormKeyDown}
           className="flex min-h-0 flex-1 flex-col gap-3"
         >
           <div ref={splitRef} className="flex min-h-0 flex-1 overflow-hidden">
@@ -330,6 +372,26 @@ export function CommitDialog({
               className="min-h-0 shrink-0 overflow-y-auto pr-4"
             >
               <div className="space-y-3">
+          {snapshot.repoState !== "normal" && (
+            <div className="flex items-start gap-2 rounded-lg border border-[var(--warning-border)] bg-[var(--warning-surface)] px-3 py-2.5 text-[9.5px] leading-relaxed text-[var(--warning)]">
+              <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+              <div>
+                <div className="font-medium">{stateInfo.label}</div>
+                <p className="mt-0.5 opacity-80">{stateInfo.description}</p>
+                {snapshot.head.detached && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="mt-2 h-6 px-2 text-[8.5px]"
+                    onClick={onCreateDetachedBranch}
+                  >
+                    创建新分支保存提交
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
           <div className="space-y-1.5">
             <label
               htmlFor="commit-title"
@@ -346,9 +408,24 @@ export function CommitDialog({
               disabled={isSubmitting}
               autoFocus
             />
-            <div className="flex items-center gap-1.5 text-[8.5px] leading-relaxed text-muted-foreground/40">
-              <ShieldCheck className="size-3 shrink-0 text-jade/50" />
-              仅写入本地仓库 · 检查右侧 diff 后提交
+            <div
+              className={`flex items-center gap-1.5 text-[8.5px] leading-relaxed ${
+                titleEmpty
+                  ? "text-rose/65"
+                  : "text-muted-foreground/40"
+              }`}
+            >
+              {titleEmpty ? (
+                <>
+                  <TriangleAlert className="size-3 shrink-0" />
+                  提交消息不能为空
+                </>
+              ) : (
+                <>
+                  <ShieldCheck className="size-3 shrink-0 text-jade/50" />
+                  仅写入本地仓库 · 检查右侧 diff 后提交
+                </>
+              )}
             </div>
           </div>
 
@@ -545,6 +622,8 @@ export function CommitDialog({
                           lines={diff.lines}
                           isBinary={diff.isBinary}
                           truncated={diff.truncated}
+                          totalLines={diff.totalLines}
+                          hasInvalidUtf8={diff.hasInvalidUtf8}
                         />
                       </div>
                     </section>
@@ -578,6 +657,16 @@ export function CommitDialog({
                   打开仓库配置
                 </Button>
               )}
+            </div>
+          )}
+
+          {!isSubmitting && (stagedEmpty || stateInfo.blocksCommit) && (
+            <div
+              role="status"
+              className="flex shrink-0 items-center gap-2 rounded-lg border border-amber-500/15 bg-amber-500/[0.045] px-3 py-2 text-[9.5px] text-amber-700/75 dark:text-amber-300/70"
+            >
+              <TriangleAlert className="size-3.5 shrink-0" />
+              {validationMessage}
             </div>
           )}
 

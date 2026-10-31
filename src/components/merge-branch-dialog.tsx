@@ -18,6 +18,7 @@ interface MergeBranchDialogProps {
   currentBranch: string | null;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => Promise<boolean>;
+  onConfirmSquash: () => Promise<boolean>;
 }
 
 export function MergeBranchDialog({
@@ -25,14 +26,21 @@ export function MergeBranchDialog({
   currentBranch,
   onOpenChange,
   onConfirm,
+  onConfirmSquash,
 }: MergeBranchDialogProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [activeMode, setActiveMode] = useState<"merge" | "squash" | null>(
+    null,
+  );
 
-  const submit = async () => {
+  const submit = async (mode: "merge" | "squash") => {
     if (!branch || isSubmitting) return;
+    setActiveMode(mode);
     setIsSubmitting(true);
-    const success = await onConfirm();
+    const success =
+      mode === "squash" ? await onConfirmSquash() : await onConfirm();
     setIsSubmitting(false);
+    setActiveMode(null);
     if (success) {
       onOpenChange(false);
     }
@@ -52,7 +60,8 @@ export function MergeBranchDialog({
           </div>
           <DialogTitle>合并分支</DialogTitle>
           <DialogDescription>
-            执行 `git merge --no-edit`，不会自动 stash、rebase 或 push。
+            普通合并执行 `git merge --no-edit`；Squash 合并执行
+            `git merge --squash`，只暂存变更，不自动提交。
           </DialogDescription>
         </DialogHeader>
 
@@ -67,6 +76,12 @@ export function MergeBranchDialog({
             <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
             合并前要求工作区干净；如果产生冲突，会进入 V1 冲突状态，可用外部合并工具处理。
           </div>
+
+          <div className="flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/[0.055] px-3 py-2 text-[9.5px] leading-relaxed text-amber-700/85 dark:text-amber-300/80">
+            <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+            Squash merge 不记录合并关系，后续重复 squash
+            可能需要重新解决冲突；长期分支建议使用普通合并。
+          </div>
         </DialogBody>
 
         <DialogFooter>
@@ -80,11 +95,30 @@ export function MergeBranchDialog({
           </Button>
           <Button
             type="button"
-            onClick={() => void submit()}
+            variant="secondary"
+            onClick={() => void submit("merge")}
             disabled={isSubmitting || !branch || !currentBranch}
           >
-            {isSubmitting ? <Loader2 className="animate-spin" /> : <GitMerge />}
-            {isSubmitting ? "正在合并…" : "确认合并"}
+            {isSubmitting && activeMode === "merge" ? (
+              <Loader2 className="animate-spin" />
+            ) : (
+              <GitMerge />
+            )}
+            {isSubmitting && activeMode === "merge" ? "正在合并…" : "普通合并"}
+          </Button>
+          <Button
+            type="button"
+            onClick={() => void submit("squash")}
+            disabled={isSubmitting || !branch || !currentBranch}
+          >
+            {isSubmitting && activeMode === "squash" ? (
+              <Loader2 className="animate-spin" />
+            ) : (
+              <GitMerge />
+            )}
+            {isSubmitting && activeMode === "squash"
+              ? "正在 Squash…"
+              : "Squash 合并"}
           </Button>
         </DialogFooter>
       </DialogContent>

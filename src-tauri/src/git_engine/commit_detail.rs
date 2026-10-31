@@ -67,6 +67,18 @@ pub(crate) fn file_diff(
     diff::read_commit(worktree, oid, path, original_path)
 }
 
+pub(crate) fn file_diff_window(
+    worktree: &Path,
+    oid: &str,
+    path: &str,
+    original_path: Option<&str>,
+    offset: u32,
+    limit: u32,
+) -> Result<FileDiff, GitError> {
+    validate_oid(oid)?;
+    diff::read_commit_window(worktree, oid, path, original_path, offset, limit)
+}
+
 fn read_files(worktree: &Path, oid: &str) -> Result<Vec<CommitFileChange>, GitError> {
     let stdout = run_git_checked(
         worktree,

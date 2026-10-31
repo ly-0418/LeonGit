@@ -1,5 +1,6 @@
-import { GitCompareArrows, TriangleAlert } from "lucide-react";
+import { GitCompareArrows, Loader2, TriangleAlert } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { DiffLine } from "@/types/git";
 
@@ -99,6 +100,12 @@ interface DiffLinesProps {
   lines: DiffLine[];
   isBinary?: boolean;
   truncated?: boolean;
+  totalLines?: number;
+  hasInvalidUtf8?: boolean;
+  onLoadFull?: () => void;
+  isLoadingFull?: boolean;
+  /** The user already loaded the maximum number of lines we render. */
+  limitReached?: boolean;
   selectable?: boolean;
   selectedLines?: Set<number>;
   onToggleLine?: (index: number) => void;
@@ -109,23 +116,68 @@ export function DiffLines({
   lines,
   isBinary = false,
   truncated = false,
+  totalLines = 0,
+  hasInvalidUtf8 = false,
+  onLoadFull,
+  isLoadingFull = false,
+  limitReached = false,
   selectable = false,
   selectedLines = new Set<number>(),
   onToggleLine = () => {},
   disabled = false,
 }: DiffLinesProps) {
+  if (isBinary) {
+    return (
+      <div
+        role="status"
+        className="flex h-full min-h-[220px] flex-col items-center justify-center px-8 text-center"
+      >
+        <div className="grid size-11 place-items-center rounded-xl border border-azure/15 bg-azure/[0.05] text-azure/75">
+          <GitCompareArrows className="size-5" />
+        </div>
+        <h3 className="mt-4 text-[13px] font-medium text-foreground/80">
+          二进制文件已变更
+        </h3>
+        <p className="mt-1.5 max-w-[360px] text-[10.5px] leading-relaxed text-muted-foreground/55">
+          二进制文件已变更，无法显示文本 diff
+        </p>
+      </div>
+    );
+  }
+
   return (
     <>
-      {isBinary && (
-        <div className="flex items-center gap-2 border-b border-azure/10 bg-azure/[0.045] px-4 py-2 text-[10px] text-azure/70">
-          <GitCompareArrows className="size-3.5" />
-          这是二进制文件，Git 只提供差异摘要。
+      {truncated && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-brand/10 bg-brand/[0.045] px-4 py-2 text-[10px] text-brand/70">
+          <TriangleAlert className="size-3.5" />
+          <span>
+            {limitReached
+              ? `已加载 ${lines.length}${
+                  totalLines > 0 ? ` / ${totalLines}` : ""
+                } 行，达到单文件查看上限；其余内容请在命令行查看`
+              : `diff 过大，已截断显示前 ${lines.length}${
+                  totalLines > 0 ? ` / ${totalLines}` : ""
+                } 行`}
+          </span>
+          {!limitReached && onLoadFull && (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="ml-auto h-6 px-2 text-[8.5px]"
+              onClick={onLoadFull}
+              disabled={isLoadingFull}
+            >
+              {isLoadingFull && <Loader2 className="animate-spin" />}
+              {isLoadingFull ? "正在加载…" : "加载完整 diff"}
+            </Button>
+          )}
         </div>
       )}
-      {truncated && (
-        <div className="flex items-center gap-2 border-b border-brand/10 bg-brand/[0.045] px-4 py-2 text-[10px] text-brand/70">
+      {hasInvalidUtf8 && (
+        <div className="flex items-center gap-2 border-b border-amber-500/15 bg-amber-500/[0.045] px-4 py-2 text-[10px] text-amber-700/75 dark:text-amber-300/70">
           <TriangleAlert className="size-3.5" />
-          差异过大，显示内容已截断。
+          文件包含非 UTF-8 字节，已以替换字符显示；为防误写，hunk 操作已禁用。
         </div>
       )}
       <div className="py-1">

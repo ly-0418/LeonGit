@@ -2,8 +2,9 @@ use std::path::Path;
 
 use super::command::{output_failure, run_git, run_git_checked};
 use super::error::GitError;
+use super::repo_state;
 use super::status;
-use super::types::StashEntry;
+use super::types::{StashEntry, StashOutcome, StashResult};
 
 const FIELD_SEPARATOR: char = '\u{1f}';
 
@@ -81,7 +82,12 @@ pub(crate) fn list(worktree: &Path) -> Result<Vec<StashEntry>, GitError> {
     Ok(entries)
 }
 
-pub(crate) fn apply(worktree: &Path, index: usize, restore_index: bool) -> Result<(), GitError> {
+pub(crate) fn apply(
+    worktree: &Path,
+    index: usize,
+    restore_index: bool,
+) -> Result<StashResult, GitError> {
+    repo_state::ensure_operation_allowed(worktree, "应用 Stash")?;
     let selector = selector_for(worktree, index)?;
     let mut args = vec!["stash", "apply"];
     if restore_index {
@@ -89,15 +95,34 @@ pub(crate) fn apply(worktree: &Path, index: usize, restore_index: bool) -> Resul
     }
     args.push(selector.as_str());
     let output = run_git(worktree, args)?;
-    if !output.status.success() {
-        let mut error = output_failure(&output);
-        error.message = format!("应用 Stash 失败，条目仍保留：{}", error.message);
-        return Err(error);
+    if output.status.success() {
+        return Ok(StashResult {
+            outcome: StashOutcome::Applied,
+            conflicts: 0,
+            message: "Stash 已应用。".to_owned(),
+        });
     }
-    Ok(())
+    let error = output_failure(&output);
+    if let Ok(data) = status::read(worktree) {
+        if data.summary.conflicted > 0 {
+            return Ok(StashResult {
+                outcome: StashOutcome::Conflict,
+                conflicts: data.summary.conflicted,
+                message: "stash 应用产生冲突；stash 条目仍保留，解决冲突后可手动 drop。".to_owned(),
+            });
+        }
+    }
+    let mut error = error;
+    error.message = format!("应用 Stash 失败，条目仍保留：{}", error.message);
+    Err(error)
 }
 
-pub(crate) fn pop(worktree: &Path, index: usize, restore_index: bool) -> Result<(), GitError> {
+pub(crate) fn pop(
+    worktree: &Path,
+    index: usize,
+    restore_index: bool,
+) -> Result<StashResult, GitError> {
+    repo_state::ensure_operation_allowed(worktree, "弹出 Stash")?;
     let selector = selector_for(worktree, index)?;
     let mut args = vec!["stash", "pop"];
     if restore_index {
@@ -105,15 +130,29 @@ pub(crate) fn pop(worktree: &Path, index: usize, restore_index: bool) -> Result<
     }
     args.push(selector.as_str());
     let output = run_git(worktree, args)?;
-    if !output.status.success() {
-        let mut error = output_failure(&output);
-        error.message = format!(
-            "弹出 Stash 失败，条目仍保留在 stash 列表中：{}",
-            error.message
-        );
-        return Err(error);
+    if output.status.success() {
+        return Ok(StashResult {
+            outcome: StashOutcome::Applied,
+            conflicts: 0,
+            message: "Stash 已弹出。".to_owned(),
+        });
     }
-    Ok(())
+    let error = output_failure(&output);
+    if let Ok(data) = status::read(worktree) {
+        if data.summary.conflicted > 0 {
+            return Ok(StashResult {
+                outcome: StashOutcome::Conflict,
+                conflicts: data.summary.conflicted,
+                message: "stash 应用产生冲突；stash 条目仍保留，解决冲突后可手动 drop。".to_owned(),
+            });
+        }
+    }
+    let mut error = error;
+    error.message = format!(
+        "弹出 Stash 失败，条目仍保留在 stash 列表中：{}",
+        error.message
+    );
+    Err(error)
 }
 
 pub(crate) fn drop(worktree: &Path, index: usize) -> Result<(), GitError> {
@@ -229,8 +268,27 @@ mod tests {
         git(&repo, &["add", "file.txt"]);
         git(&repo, &["commit", "-q", "-m", "conflicting commit"]);
 
-        let error = pop(&repo, 0, false).expect_err("pop should conflict");
-        assert!(error.message.contains("条目仍保留"));
+        let result = pop(&repo, 0, false).expect("pop should report conflict");
+        assert_eq!(result.outcome, StashOutcome::Conflict);
+        assert_eq!(result.conflicts, 1);
+        assert!(result.message.contains("stash 条目仍保留"));
+        assert_eq!(list(&repo).expect("stash remains").len(), 1);
+    }
+
+    #[test]
+    fn apply_conflict_reports_result_and_keeps_stash_entry() {
+        let temp = init_repo();
+        let repo = temp.path().join("repo");
+        fs::write(repo.join("file.txt"), "stashed\n").expect("stashed change");
+        push(&repo, Some("conflict"), false).expect("push stash");
+
+        fs::write(repo.join("file.txt"), "committed\n").expect("committed change");
+        git(&repo, &["add", "file.txt"]);
+        git(&repo, &["commit", "-q", "-m", "conflicting commit"]);
+
+        let result = apply(&repo, 0, false).expect("apply should report conflict");
+        assert_eq!(result.outcome, StashOutcome::Conflict);
+        assert_eq!(result.conflicts, 1);
         assert_eq!(list(&repo).expect("stash remains").len(), 1);
     }
 

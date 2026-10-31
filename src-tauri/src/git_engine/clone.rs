@@ -2,8 +2,9 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
 
-use super::command::run_git_remote_checked;
+use super::command::run_git_remote;
 use super::error::GitError;
+use super::remote_auth;
 use super::repository;
 use super::types::RepositorySnapshot;
 
@@ -18,10 +19,13 @@ pub(crate) fn clone_repository(url: &str, target: &str) -> Result<RepositorySnap
         "clone".into(),
         "--progress".into(),
         "--".into(),
-        url.into(),
+        url.as_str().into(),
         target.as_os_str().to_owned(),
     ];
-    run_git_remote_checked(parent, args)?;
+    let output = run_git_remote(parent, args)?;
+    if !output.status.success() {
+        return Err(remote_auth::failure_with_url(parent, &output, &url));
+    }
 
     let target = target.to_str().ok_or_else(|| {
         GitError::invalid_path("克隆目标路径包含当前系统无法表示的字符，无法打开。")

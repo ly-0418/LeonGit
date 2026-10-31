@@ -23,6 +23,15 @@ pub async fn open_repository(path: String) -> Result<RepositorySnapshot, GitErro
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn remote_auth_info(repo_path: String) -> Result<git_engine::RemoteAuthInfo, GitError> {
+    run_blocking(move || {
+        let worktree = git_engine::safe_repo_path(&repo_path)?;
+        git_engine::remote_auth_info(&worktree)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn init_repository(path: String, initial_branch: Option<String>) -> Result<(), GitError> {
     run_blocking(move || git_engine::init_repository(&path, initial_branch.as_deref())).await
 }
@@ -67,6 +76,60 @@ pub async fn get_file_diff(
     run_blocking(move || {
         let worktree = git_engine::safe_repo_path(&repo_path)?;
         git_engine::file_diff(&worktree, &path, original_path.as_deref(), scope)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn add_to_gitignore(
+    repo_path: String,
+    pattern: String,
+    target_gitignore: Option<String>,
+) -> Result<(), GitError> {
+    run_blocking(move || {
+        let worktree = git_engine::safe_repo_path(&repo_path)?;
+        git_engine::add_to_gitignore(&worktree, &pattern, target_gitignore.as_deref())
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn check_ignored(repo_path: String, path: String) -> Result<bool, GitError> {
+    run_blocking(move || {
+        let worktree = git_engine::safe_repo_path(&repo_path)?;
+        git_engine::check_ignored(&worktree, &path)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn list_gitignore_files(repo_path: String) -> Result<Vec<String>, GitError> {
+    run_blocking(move || {
+        let worktree = git_engine::safe_repo_path(&repo_path)?;
+        git_engine::list_gitignore_files(&worktree)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn get_file_diff_window(
+    repo_path: String,
+    path: String,
+    original_path: Option<String>,
+    scope: DiffScope,
+    offset: u32,
+    limit: u32,
+) -> Result<FileDiff, GitError> {
+    run_blocking(move || {
+        let worktree = git_engine::safe_repo_path(&repo_path)?;
+        git_engine::file_diff_window(
+            &worktree,
+            &path,
+            original_path.as_deref(),
+            scope,
+            offset,
+            limit,
+        )
     })
     .await
 }
@@ -274,6 +337,19 @@ pub async fn commit_staged(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn commit_empty(
+    repo_path: String,
+    title: String,
+    body: Option<String>,
+) -> Result<CommitResult, GitError> {
+    run_blocking(move || {
+        let worktree = git_engine::safe_repo_path(&repo_path)?;
+        git_engine::empty_commit(&worktree, &title, body.as_deref())
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn commit_and_push(
     repo_path: String,
     title: String,
@@ -329,6 +405,24 @@ pub async fn commit_staged_with_author(
             Some(&author_email),
             no_verify,
         )
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn reset_soft(repo_path: String, target_sha: String) -> Result<(), GitError> {
+    run_blocking(move || {
+        let worktree = git_engine::safe_repo_path(&repo_path)?;
+        git_engine::soft_reset(&worktree, &target_sha)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn count_soft_reset(repo_path: String, target_sha: String) -> Result<u32, GitError> {
+    run_blocking(move || {
+        let worktree = git_engine::safe_repo_path(&repo_path)?;
+        git_engine::soft_reset_count(&worktree, &target_sha)
     })
     .await
 }
@@ -400,6 +494,29 @@ pub async fn get_commit_file_diff(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn get_commit_file_diff_window(
+    repo_path: String,
+    oid: String,
+    path: String,
+    original_path: Option<String>,
+    offset: u32,
+    limit: u32,
+) -> Result<FileDiff, GitError> {
+    run_blocking(move || {
+        let worktree = git_engine::safe_repo_path(&repo_path)?;
+        git_engine::commit_file_diff_window(
+            &worktree,
+            &oid,
+            &path,
+            original_path.as_deref(),
+            offset,
+            limit,
+        )
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn list_branches(repo_path: String) -> Result<Vec<BranchInfo>, GitError> {
     run_blocking(move || {
         let worktree = git_engine::safe_repo_path(&repo_path)?;
@@ -429,6 +546,32 @@ pub async fn checkout_branch(
     run_blocking(move || {
         let worktree = git_engine::safe_repo_path(&repo_path)?;
         git_engine::checkout_branch(&worktree, &name)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn create_branch_from_detached(
+    repo_path: String,
+    branch_name: String,
+) -> Result<(), GitError> {
+    run_blocking(move || {
+        let worktree = git_engine::safe_repo_path(&repo_path)?;
+        git_engine::create_branch_from_detached(&worktree, &branch_name)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn set_upstream(
+    repo_path: String,
+    branch: String,
+    remote: String,
+    remote_branch: String,
+) -> Result<(), GitError> {
+    run_blocking(move || {
+        let worktree = git_engine::safe_repo_path(&repo_path)?;
+        git_engine::set_upstream(&worktree, &branch, &remote, &remote_branch)
     })
     .await
 }
@@ -569,6 +712,36 @@ pub async fn merge_branch(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub async fn merge_branch_squash(
+    repo_path: String,
+    source_branch: String,
+) -> Result<git_engine::MergeResult, GitError> {
+    run_blocking(move || {
+        let worktree = git_engine::safe_repo_path(&repo_path)?;
+        git_engine::merge_branch_squash(&worktree, &source_branch)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn squash_merge_abort(repo_path: String) -> Result<(), GitError> {
+    run_blocking(move || {
+        let worktree = git_engine::safe_repo_path(&repo_path)?;
+        git_engine::abort_squash(&worktree)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn merge_abort(repo_path: String) -> Result<(), GitError> {
+    run_blocking(move || {
+        let worktree = git_engine::safe_repo_path(&repo_path)?;
+        git_engine::merge_abort(&worktree)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub async fn open_merge_tool(
     repo_path: String,
     path: String,
@@ -628,7 +801,7 @@ pub async fn stash_apply(
     repo_path: String,
     index: usize,
     restore_index: bool,
-) -> Result<(), GitError> {
+) -> Result<git_engine::StashResult, GitError> {
     run_blocking(move || {
         let worktree = git_engine::safe_repo_path(&repo_path)?;
         git_engine::stash_apply(&worktree, index, restore_index)
@@ -641,7 +814,7 @@ pub async fn stash_pop(
     repo_path: String,
     index: usize,
     restore_index: bool,
-) -> Result<(), GitError> {
+) -> Result<git_engine::StashResult, GitError> {
     run_blocking(move || {
         let worktree = git_engine::safe_repo_path(&repo_path)?;
         git_engine::stash_pop(&worktree, index, restore_index)

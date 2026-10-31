@@ -290,6 +290,7 @@ export function DiffView({
     Boolean(diff) &&
     !diff?.isBinary &&
     !diff?.truncated &&
+    !diff?.hasInvalidUtf8 &&
     hunks.length > 0;
 
   const canDiscardLines =
@@ -299,6 +300,7 @@ export function DiffView({
     Boolean(diff) &&
     !diff?.isBinary &&
     !diff?.truncated &&
+    !diff?.hasInvalidUtf8 &&
     hunks.length > 0;
 
   const discardPreview = useMemo(
@@ -678,6 +680,11 @@ export function DiffView({
             lines={diff.lines}
             isBinary={diff.isBinary}
             truncated={diff.truncated}
+            totalLines={diff.totalLines}
+            hasInvalidUtf8={diff.hasInvalidUtf8}
+            onLoadFull={controller.loadFull}
+            isLoadingFull={controller.isLoadingFull}
+            limitReached={controller.fullLimitReached}
             selectable={canDiscardLines}
             selectedLines={selectedLines}
             onToggleLine={toggleLine}

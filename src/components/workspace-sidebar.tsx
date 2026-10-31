@@ -53,6 +53,7 @@ interface WorkspaceSidebarProps {
   onCreateBranch: () => void;
   onRestoreRemote: () => void;
   onRenameBranch: (branch: BranchInfo) => void;
+  onSetUpstream: (branch: BranchInfo) => void;
   onMergeBranch: (branch: BranchInfo) => void;
   onManageTags: () => void;
   onCheckoutBranch: (branch: BranchInfo) => void;
@@ -86,6 +87,7 @@ export function WorkspaceSidebar({
   onCreateBranch,
   onRestoreRemote,
   onRenameBranch,
+  onSetUpstream,
   onMergeBranch,
   onManageTags,
   onCheckoutBranch,
@@ -158,6 +160,7 @@ export function WorkspaceSidebar({
           onCheckout={onCheckoutBranch}
           onDelete={onDeleteBranch}
           onRename={onRenameBranch}
+          onSetUpstream={onSetUpstream}
           onMerge={onMergeBranch}
           onReload={onReloadRefs}
           onRestoreRemote={onRestoreRemote}

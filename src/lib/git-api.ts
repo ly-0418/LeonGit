@@ -8,11 +8,13 @@ import type {
   CommitPushResult,
   CommitResult,
   DiffScope,
+  FetchOutcome,
   FileDiff,
   GitError,
   GitErrorKind,
   MergeResult,
   ReflogEntry,
+  RemoteAuthInfo,
   RepositoryConfig,
   RepositorySnapshot,
   RemoteBranchInfo,
@@ -20,6 +22,7 @@ import type {
   RenameBranchResult,
   RevertResult,
   StashEntry,
+  StashResult,
   SyncResult,
   TagEntry,
 } from "@/types/git";
@@ -30,6 +33,8 @@ const GIT_ERROR_KINDS: readonly GitErrorKind[] = [
   "invalidPath",
   "invalidInput",
   "identityMissing",
+  "emptyStagingArea",
+  "emptyCommitMessage",
   "worktreeDirty",
   "commandFailed",
   "timeout",
@@ -37,8 +42,41 @@ const GIT_ERROR_KINDS: readonly GitErrorKind[] = [
   "io",
 ];
 
+const FETCH_OUTCOMES: readonly FetchOutcome[] = [
+  "authFailed",
+  "credentialHelperMissing",
+  "sshKeyNotLoaded",
+  "hostKeyUnknown",
+  "networkError",
+  "other",
+];
+
 export function openRepository(path: string): Promise<RepositorySnapshot> {
   return invoke<RepositorySnapshot>("open_repository", { path });
+}
+
+export function getRemoteAuthInfo(repoPath: string): Promise<RemoteAuthInfo> {
+  return invoke<RemoteAuthInfo>("remote_auth_info", { repoPath });
+}
+
+export function addToGitignore(
+  repoPath: string,
+  pattern: string,
+  targetGitignore: string | null,
+): Promise<void> {
+  return invoke<void>("add_to_gitignore", {
+    repoPath,
+    pattern,
+    targetGitignore,
+  });
+}
+
+export function checkIgnored(repoPath: string, path: string): Promise<boolean> {
+  return invoke<boolean>("check_ignored", { repoPath, path });
+}
+
+export function listGitignoreFiles(repoPath: string): Promise<string[]> {
+  return invoke<string[]>("list_gitignore_files", { repoPath });
 }
 
 export function initRepository(
@@ -84,6 +122,36 @@ export function getFileDiff(
     path,
     originalPath,
     scope,
+  });
+}
+
+export function getFileDiffWindow(
+  repoPath: string,
+  path: string,
+  originalPath: string | null,
+  scope: DiffScope,
+  offset: number,
+  limit: number,
+): Promise<FileDiff> {
+  return invoke<FileDiff>("get_file_diff_window", {
+    repoPath,
+    path,
+    originalPath,
+    scope,
+    offset,
+    limit,
+  });
+}
+
+export function commitEmpty(
+  repoPath: string,
+  title: string,
+  body: string,
+): Promise<CommitResult> {
+  return invoke<CommitResult>("commit_empty", {
+    repoPath,
+    title,
+    body: body.trim() ? body : null,
   });
 }
 
@@ -162,6 +230,17 @@ export function deleteTag(
   name: string,
 ): Promise<TagEntry[]> {
   return invoke<TagEntry[]>("delete_tag", { repoPath, name });
+}
+
+export function resetSoft(repoPath: string, targetSha: string): Promise<void> {
+  return invoke<void>("reset_soft", { repoPath, targetSha });
+}
+
+export function countSoftReset(
+  repoPath: string,
+  targetSha: string,
+): Promise<number> {
+  return invoke<number>("count_soft_reset", { repoPath, targetSha });
 }
 
 export function revertCommit(
@@ -330,6 +409,24 @@ export function getCommitFileDiff(
   });
 }
 
+export function getCommitFileDiffWindow(
+  repoPath: string,
+  oid: string,
+  path: string,
+  originalPath: string | null,
+  offset: number,
+  limit: number,
+): Promise<FileDiff> {
+  return invoke<FileDiff>("get_commit_file_diff_window", {
+    repoPath,
+    oid,
+    path,
+    originalPath,
+    offset,
+    limit,
+  });
+}
+
 export function listBranches(repoPath: string): Promise<BranchInfo[]> {
   return invoke<BranchInfo[]>("list_branches", { repoPath });
 }
@@ -343,6 +440,30 @@ export function createBranch(
     repoPath,
     name,
     startPoint,
+  });
+}
+
+export function createBranchFromDetached(
+  repoPath: string,
+  branchName: string,
+): Promise<void> {
+  return invoke<void>("create_branch_from_detached", {
+    repoPath,
+    branchName,
+  });
+}
+
+export function setUpstream(
+  repoPath: string,
+  branch: string,
+  remote: string,
+  remoteBranch: string,
+): Promise<void> {
+  return invoke<void>("set_upstream", {
+    repoPath,
+    branch,
+    remote,
+    remoteBranch,
   });
 }
 
@@ -369,6 +490,24 @@ export function mergeBranch(
     repoPath,
     sourceBranch,
   });
+}
+
+export function mergeBranchSquash(
+  repoPath: string,
+  sourceBranch: string,
+): Promise<MergeResult> {
+  return invoke<MergeResult>("merge_branch_squash", {
+    repoPath,
+    sourceBranch,
+  });
+}
+
+export function squashMergeAbort(repoPath: string): Promise<void> {
+  return invoke<void>("squash_merge_abort", { repoPath });
+}
+
+export function mergeAbort(repoPath: string): Promise<void> {
+  return invoke<void>("merge_abort", { repoPath });
 }
 
 export function renameBranch(
@@ -485,16 +624,16 @@ export function stashApply(
   repoPath: string,
   index: number,
   restoreIndex: boolean,
-): Promise<void> {
-  return invoke<void>("stash_apply", { repoPath, index, restoreIndex });
+): Promise<StashResult> {
+  return invoke<StashResult>("stash_apply", { repoPath, index, restoreIndex });
 }
 
 export function stashPop(
   repoPath: string,
   index: number,
   restoreIndex: boolean,
-): Promise<void> {
-  return invoke<void>("stash_pop", { repoPath, index, restoreIndex });
+): Promise<StashResult> {
+  return invoke<StashResult>("stash_pop", { repoPath, index, restoreIndex });
 }
 
 export function stashDrop(repoPath: string, index: number): Promise<void> {
@@ -515,6 +654,10 @@ export function toGitError(error: unknown): GitError {
     return {
       kind: error.kind as GitErrorKind,
       message: error.message,
+      ...(typeof error.fetchOutcome === "string" &&
+      FETCH_OUTCOMES.includes(error.fetchOutcome as FetchOutcome)
+        ? { fetchOutcome: error.fetchOutcome as FetchOutcome }
+        : {}),
     };
   }
 

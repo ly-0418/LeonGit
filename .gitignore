@@ -13,6 +13,9 @@ src-tauri/gen
 Data
 WebView2Data
 
+# Local acceptance builds produced by scripts/build-release.ps1.
+/release/
+
 .DS_Store
 Thumbs.db
 *.log

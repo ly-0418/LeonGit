@@ -1,8 +1,10 @@
 use std::path::Path;
 
-use super::command::{output_failure, run_git_remote};
+use super::command::run_git_remote;
 use super::error::GitError;
+use super::remote_auth;
 use super::remotes;
+use super::repo_state;
 use super::repository;
 use super::status;
 use super::types::{SyncAction, SyncOutcome, SyncResult};
@@ -17,7 +19,7 @@ pub(crate) fn fetch(worktree: &Path) -> Result<SyncResult, GitError> {
 
     let output = run_git_remote(worktree, ["fetch", "--progress", "origin"])?;
     if !output.status.success() {
-        return Err(output_failure(&output));
+        return Err(remote_auth::failure(worktree, &output, Some("origin")));
     }
     let snapshot = repository::snapshot_at_root(worktree)?;
 
@@ -32,6 +34,7 @@ pub(crate) fn fetch(worktree: &Path) -> Result<SyncResult, GitError> {
 }
 
 pub(crate) fn pull(worktree: &Path) -> Result<SyncResult, GitError> {
+    repo_state::ensure_operation_allowed(worktree, "Pull")?;
     let data = status::read(worktree)?;
     if !data.summary.is_clean {
         return Err(GitError::worktree_dirty(
@@ -58,7 +61,7 @@ pub(crate) fn pull(worktree: &Path) -> Result<SyncResult, GitError> {
     let conflict_exit = output.status.code() == Some(1) && conflict_count > 0;
 
     if !output.status.success() && !conflict_exit {
-        return Err(output_failure(&output));
+        return Err(remote_auth::failure(worktree, &output, Some(&remote)));
     }
     if conflict_exit {
         return Ok(SyncResult {
@@ -82,6 +85,7 @@ pub(crate) fn pull(worktree: &Path) -> Result<SyncResult, GitError> {
 }
 
 pub(crate) fn push(worktree: &Path) -> Result<SyncResult, GitError> {
+    repo_state::ensure_operation_allowed(worktree, "Push")?;
     let data = status::read(worktree)?;
     if data.summary.conflicted > 0 {
         return Err(GitError::invalid_input(
@@ -128,7 +132,7 @@ pub(crate) fn push(worktree: &Path) -> Result<SyncResult, GitError> {
 
     let output = run_git_remote(worktree, args)?;
     if !output.status.success() {
-        return Err(output_failure(&output));
+        return Err(remote_auth::failure(worktree, &output, Some(&remote)));
     }
     let snapshot = repository::snapshot_at_root(worktree)?;
 

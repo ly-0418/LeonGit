@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { getCommitFileDiff, getCommitDetail, toGitError } from "@/lib/git-api";
+import {
+  getCommitFileDiff,
+  getCommitFileDiffWindow,
+  getCommitDetail,
+  toGitError,
+} from "@/lib/git-api";
 import type {
   CommitDetail,
   CommitFileChange,
   FileDiff,
   GitError,
 } from "@/types/git";
+
+const FULL_DIFF_PAGE_SIZE = 5_000;
 
 export interface CommitDetailController {
   detail: CommitDetail | null;
@@ -15,8 +22,10 @@ export interface CommitDetailController {
   selectedFile: CommitFileChange | null;
   fileDiff: FileDiff | null;
   isFileLoading: boolean;
+  isFileLoadingFull: boolean;
   fileError: GitError | null;
   selectFile: (file: CommitFileChange) => void;
+  loadFullFileDiff: () => void;
   retry: () => void;
 }
 
@@ -32,6 +41,7 @@ export function useCommitDetail(
   );
   const [fileDiff, setFileDiff] = useState<FileDiff | null>(null);
   const [isFileLoading, setIsFileLoading] = useState(false);
+  const [isFileLoadingFull, setIsFileLoadingFull] = useState(false);
   const [fileError, setFileError] = useState<GitError | null>(null);
   const [detailToken, setDetailToken] = useState(0);
   const [fileToken, setFileToken] = useState(0);
@@ -43,6 +53,7 @@ export function useCommitDetail(
     setSelectedFile(null);
     setFileDiff(null);
     setFileError(null);
+    setIsFileLoadingFull(false);
 
     if (!oid) {
       setDetail(null);
@@ -79,12 +90,14 @@ export function useCommitDetail(
       setFileDiff(null);
       setFileError(null);
       setIsFileLoading(false);
+      setIsFileLoadingFull(false);
       return;
     }
 
     setIsFileLoading(true);
     setFileError(null);
     setFileDiff(null);
+    setIsFileLoadingFull(false);
     void getCommitFileDiff(
       repoPath,
       oid,
@@ -119,6 +132,56 @@ export function useCommitDetail(
   const selectFile = useCallback((file: CommitFileChange) => {
     setSelectedFile(file);
   }, []);
+  const loadFullFileDiff = useCallback(() => {
+    if (!oid || !selectedFile || !fileDiff || !fileDiff.truncated || isFileLoadingFull) {
+      return;
+    }
+    const requestId = fileSequence.current;
+    setIsFileLoadingFull(true);
+    setFileError(null);
+
+    void (async () => {
+      let merged = fileDiff.lines;
+      let total = fileDiff.totalLines;
+      try {
+        while (merged.length < total) {
+          const page = await getCommitFileDiffWindow(
+            repoPath,
+            oid,
+            selectedFile.path,
+            selectedFile.originalPath,
+            merged.length,
+            FULL_DIFF_PAGE_SIZE,
+          );
+          if (requestId !== fileSequence.current) {
+            return;
+          }
+          total = page.totalLines;
+          if (page.lines.length === 0) {
+            break;
+          }
+          merged = [...merged, ...page.lines];
+          if (merged.length < total) {
+            setFileDiff({ ...page, lines: merged, totalLines: total });
+          }
+        }
+        setFileDiff({
+          ...fileDiff,
+          lines: merged,
+          totalLines: total,
+          truncated: false,
+        });
+      } catch (rawError: unknown) {
+        if (requestId === fileSequence.current) {
+          setFileError(toGitError(rawError));
+        }
+      } finally {
+        if (requestId === fileSequence.current) {
+          setIsFileLoadingFull(false);
+        }
+      }
+    })();
+  }, [fileDiff, isFileLoadingFull, oid, repoPath, selectedFile]);
   const retry = useCallback(() => {
     setDetailToken((token) => token + 1);
     setFileToken((token) => token + 1);
@@ -131,8 +194,10 @@ export function useCommitDetail(
     selectedFile,
     fileDiff,
     isFileLoading,
+    isFileLoadingFull,
     fileError,
     selectFile,
+    loadFullFileDiff,
     retry,
   };
 }

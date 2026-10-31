@@ -3,6 +3,7 @@ import {
   ChevronRight,
   FilePlus2,
   FileText,
+  EyeOff,
   GitCommitHorizontal,
   GitMerge,
   Loader2,
@@ -13,12 +14,14 @@ import {
   TriangleAlert,
   Undo2,
 } from "lucide-react";
-import type { ComponentType } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { useEffect, useMemo, useRef, type ComponentType } from "react";
 
 import { Button } from "@/components/ui/button";
 import { StashPanel } from "@/components/stash-panel";
 import { changeBadgeClass, CHANGE_LABELS } from "@/lib/changes";
 import { fileName, formatCount, parentPath } from "@/lib/format";
+import { repoStateInfo } from "@/lib/repo-state";
 import { cn } from "@/lib/utils";
 import type {
   DiffScope,
@@ -36,6 +39,7 @@ interface WorkingTreeActions {
   onStage: (file: StatusFile) => void;
   onUnstage: (file: StatusFile) => void;
   onDiscard: (file: StatusFile) => void;
+  onIgnore: (file: StatusFile, tracked: boolean) => void;
   onOpenCommit: () => void;
   onOpenMergeTool: (file: StatusFile) => void;
   onMarkResolved: (file: StatusFile) => void;
@@ -47,6 +51,7 @@ interface WorkingTreeOverviewProps extends WorkingTreeActions {
   onRefresh: () => void;
   onStageAll: () => void;
   onOpenAmend: () => void;
+  onOpenEmptyCommit: () => void;
   onStashError: (error: unknown) => void;
   onSelectFile: (file: StatusFile, scope: DiffScope) => void;
 }
@@ -61,6 +66,23 @@ interface GroupDefinition {
   dot: string;
   icon: ComponentType<{ className?: string }>;
 }
+
+type WorkspaceItem =
+  | {
+      kind: "group";
+      key: string;
+      group: GroupDefinition;
+      firstGroup: boolean;
+    }
+  | {
+      kind: "file";
+      key: string;
+      groupKey: GroupKey;
+      file: StatusFile;
+      scope: DiffScope;
+      firstFile: boolean;
+      lastFile: boolean;
+    };
 
 function summaryTiles(summary: WorkingTreeSummary) {
   return [
@@ -101,6 +123,7 @@ function ActionButton({
   tone,
   disabled,
   loading,
+  title,
   onClick,
 }: {
   label: string;
@@ -108,6 +131,7 @@ function ActionButton({
   tone: string;
   disabled: boolean;
   loading: boolean;
+  title?: string;
   onClick: () => void;
 }) {
   return (
@@ -115,7 +139,7 @@ function ActionButton({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      title={label}
+      title={title ?? label}
       className={cn(
         "inline-flex h-6 shrink-0 items-center gap-1 rounded-[5px] border border-[var(--line)] bg-[var(--surface-subtle)] px-1.5 text-[8.5px] outline-none transition-colors hover:border-[var(--line-strong)] hover:bg-[var(--surface-hover)] focus-visible:ring-1 focus-visible:ring-brand/40 disabled:pointer-events-none disabled:opacity-35",
         tone,
@@ -137,12 +161,14 @@ function FileRow({
   actions,
   onSelect,
   scope,
+  firstFile,
 }: {
   file: StatusFile;
   groupKey: GroupKey;
   actions: WorkingTreeActions;
   onSelect: (file: StatusFile, scope: DiffScope) => void;
   scope: DiffScope;
+  firstFile: boolean;
 }) {
   const Icon =
     file.change === "added" || file.change === "untracked"
@@ -151,7 +177,12 @@ function FileRow({
   const loading = actions.isMutating && actions.actionPath === file.path;
 
   return (
-    <div className="group flex items-center border-t border-[var(--line-subtle)] first:border-t-0 hover:bg-[var(--surface-subtle)]">
+    <div
+      className={cn(
+        "group flex items-center hover:bg-[var(--surface-subtle)]",
+        !firstFile && "border-t border-[var(--line-subtle)]",
+      )}
+    >
       <button
         type="button"
         onClick={() => onSelect(file, scope)}
@@ -213,6 +244,19 @@ function FileRow({
             onClick={() => actions.onDiscard(file)}
           />
         )}
+        {(groupKey === "untracked" ||
+          groupKey === "staged" ||
+          groupKey === "unstaged") && (
+          <ActionButton
+            label="忽略"
+            icon={EyeOff}
+            tone="text-muted-foreground/45 hover:text-foreground/70"
+            disabled={actions.isMutating || actions.isOpening}
+            loading={false}
+            title="加入 .gitignore"
+            onClick={() => actions.onIgnore(file, groupKey !== "untracked")}
+          />
+        )}
         {groupKey === "conflicted" && (
           <>
             <ActionButton
@@ -247,49 +291,34 @@ function FileRow({
   );
 }
 
-function GroupSection({
+function GroupHeader({
   group,
-  actions,
-  onSelectFile,
+  firstGroup,
 }: {
   group: GroupDefinition;
-  actions: WorkingTreeActions;
-  onSelectFile: (file: StatusFile, scope: DiffScope) => void;
+  firstGroup: boolean;
 }) {
-  if (group.files.length === 0) {
-    return null;
-  }
-
   const Icon = group.icon;
 
   return (
-    <section>
-      <div className="mb-2 flex items-center gap-2 px-0.5">
-        <Icon className={cn("size-3.5", group.tone)} />
-        <span className="text-[10.5px] font-medium text-foreground/70">
-          {group.label}
-        </span>
-        <span className={cn("size-1.5 rounded-full", group.dot)} />
-        <span className="font-mono text-[9.5px] tabular-nums text-muted-foreground/35">
-          {formatCount(group.files.length)}
-        </span>
-        <span className="ml-auto text-[9px] text-muted-foreground/30">
-          {group.description}
-        </span>
-      </div>
-      <div className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface-subtle)]">
-        {group.files.map((file) => (
-          <FileRow
-            key={`${group.key}:${file.path}:${file.change}`}
-            file={file}
-            groupKey={group.key}
-            actions={actions}
-            onSelect={onSelectFile}
-            scope={group.defaultScope}
-          />
-        ))}
-      </div>
-    </section>
+    <div
+      className={cn(
+        "flex items-center gap-2 px-0.5 pb-2",
+        !firstGroup && "pt-5",
+      )}
+    >
+      <Icon className={cn("size-3.5", group.tone)} />
+      <span className="text-[10.5px] font-medium text-foreground/70">
+        {group.label}
+      </span>
+      <span className={cn("size-1.5 rounded-full", group.dot)} />
+      <span className="font-mono text-[9.5px] tabular-nums text-muted-foreground/35">
+        {formatCount(group.files.length)}
+      </span>
+      <span className="ml-auto text-[9px] text-muted-foreground/30">
+        {group.description}
+      </span>
+    </div>
   );
 }
 
@@ -308,10 +337,14 @@ export function WorkingTreeOverview({
   onDiscard,
   onOpenCommit,
   onOpenAmend,
+  onOpenEmptyCommit,
+  onIgnore,
   onOpenMergeTool,
   onMarkResolved,
 }: WorkingTreeOverviewProps) {
   const summary = snapshot.workingTree;
+  const stateInfo = repoStateInfo(snapshot.repoState);
+  const commitBlocked = stateInfo.blocksCommit;
   const tiles = summaryTiles(summary);
   const actions: WorkingTreeActions = {
     isMutating,
@@ -320,53 +353,107 @@ export function WorkingTreeOverview({
     onStage,
     onUnstage,
     onDiscard,
+    onIgnore,
     onOpenCommit,
     onOpenMergeTool,
     onMarkResolved,
   };
-  const groups: GroupDefinition[] = [
-    {
-      key: "conflicted",
-      label: "冲突",
-      description: "打开外部工具或标记已解决",
-      files: snapshot.files.conflicted,
-      defaultScope: "worktree",
-      tone: "text-rose",
-      dot: "bg-rose",
-      icon: TriangleAlert,
+  const groups = useMemo<GroupDefinition[]>(
+    () => [
+      {
+        key: "conflicted",
+        label: "冲突",
+        description: "打开外部工具或标记已解决",
+        files: snapshot.files.conflicted,
+        defaultScope: "worktree",
+        tone: "text-rose",
+        dot: "bg-rose",
+        icon: TriangleAlert,
+      },
+      {
+        key: "staged",
+        label: "已暂存",
+        description: "已进入索引",
+        files: snapshot.files.staged,
+        defaultScope: "staged",
+        tone: "text-jade",
+        dot: "bg-jade",
+        icon: Check,
+      },
+      {
+        key: "unstaged",
+        label: "未暂存",
+        description: "工作区已修改",
+        files: snapshot.files.unstaged,
+        defaultScope: "worktree",
+        tone: "text-brand",
+        dot: "bg-brand",
+        icon: PencilLine,
+      },
+      {
+        key: "untracked",
+        label: "未跟踪",
+        description: "尚未进入 Git",
+        files: snapshot.files.untracked,
+        defaultScope: "worktree",
+        tone: "text-azure",
+        dot: "bg-azure",
+        icon: FilePlus2,
+      },
+    ],
+    [snapshot.files],
+  );
+
+  const items = useMemo<WorkspaceItem[]>(() => {
+    const next: WorkspaceItem[] = [];
+    let firstGroup = true;
+    for (const group of groups) {
+      if (group.files.length === 0) {
+        continue;
+      }
+      next.push({
+        kind: "group",
+        key: `group:${group.key}`,
+        group,
+        firstGroup,
+      });
+      group.files.forEach((file, index) => {
+        next.push({
+          kind: "file",
+          key: `file:${group.key}:${file.path}:${file.change}`,
+          groupKey: group.key,
+          file,
+          scope: group.defaultScope,
+          firstFile: index === 0,
+          lastFile: index === group.files.length - 1,
+        });
+      });
+      firstGroup = false;
+    }
+    return next;
+  }, [groups]);
+
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const virtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => listRef.current,
+    estimateSize: (index) => {
+      const item = items[index];
+      if (item?.kind === "group") {
+        return item.firstGroup ? 32 : 52;
+      }
+      return 46;
     },
-    {
-      key: "staged",
-      label: "已暂存",
-      description: "已进入索引",
-      files: snapshot.files.staged,
-      defaultScope: "staged",
-      tone: "text-jade",
-      dot: "bg-jade",
-      icon: Check,
-    },
-    {
-      key: "unstaged",
-      label: "未暂存",
-      description: "工作区已修改",
-      files: snapshot.files.unstaged,
-      defaultScope: "worktree",
-      tone: "text-brand",
-      dot: "bg-brand",
-      icon: PencilLine,
-    },
-    {
-      key: "untracked",
-      label: "未跟踪",
-      description: "尚未进入 Git",
-      files: snapshot.files.untracked,
-      defaultScope: "worktree",
-      tone: "text-azure",
-      dot: "bg-azure",
-      icon: FilePlus2,
-    },
-  ];
-  const hasFiles = groups.some((group) => group.files.length > 0);
+    overscan: 12,
+    getItemKey: (index) => items[index]?.key ?? index,
+  });
+  const virtualItems = virtualizer.getVirtualItems();
+
+  useEffect(() => {
+    listRef.current?.scrollTo({ top: 0 });
+  }, [snapshot.path, snapshot.head.branch, snapshot.head.oid]);
+
+  const hasFiles = items.length > 0;
 
   return (
     <section className="flex h-full min-h-0 flex-col">
@@ -392,14 +479,27 @@ export function WorkingTreeOverview({
               整文件暂存 · 在文件行内操作
             </p>
             {snapshot.head.oid && (
-              <button
-                type="button"
-                onClick={onOpenAmend}
-                disabled={isMutating || isOpening}
-                className="mt-1.5 text-[8.5px] text-muted-foreground/35 underline-offset-2 transition-colors hover:text-brand/70 hover:underline disabled:pointer-events-none disabled:opacity-40"
-              >
-                Amend 上次提交
-              </button>
+              <div className="mt-1.5 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onOpenAmend}
+                  disabled={isMutating || isOpening}
+                  className="text-[8.5px] text-muted-foreground/35 underline-offset-2 transition-colors hover:text-brand/70 hover:underline disabled:pointer-events-none disabled:opacity-40"
+                >
+                  Amend 上次提交
+                </button>
+                {summary.staged === 0 && (
+                  <button
+                    type="button"
+                    onClick={onOpenEmptyCommit}
+                    disabled={isMutating || isOpening || commitBlocked}
+                    title="显式创建不含文件变更的空提交"
+                    className="text-[8.5px] text-muted-foreground/30 underline-offset-2 transition-colors hover:text-amber-600/75 hover:underline disabled:pointer-events-none disabled:opacity-40"
+                  >
+                    空提交（显式）
+                  </button>
+                )}
+              </div>
             )}
           </div>
 
@@ -435,15 +535,24 @@ export function WorkingTreeOverview({
               />
               {isRefreshing ? "刷新中" : "刷新"}
             </Button>
+            {summary.staged === 0 && (
+              <span className="text-[8.5px] text-muted-foreground/35">
+                没有已暂存的变更
+              </span>
+            )}
             <Button
               size="sm"
               className="h-8 gap-1.5 px-2.5 text-[10px]"
               onClick={onOpenCommit}
-              disabled={summary.staged === 0 || isMutating || isOpening}
+              disabled={
+                summary.staged === 0 || isMutating || isOpening || commitBlocked
+              }
               title={
-                summary.staged === 0
-                  ? "暂存文件后才能提交"
-                  : "提交已暂存变更"
+                commitBlocked
+                  ? `当前${stateInfo.label}，请先完成或中止后再提交`
+                  : summary.staged === 0
+                    ? "没有已暂存的变更"
+                    : "提交已暂存变更"
               }
             >
               <GitCommitHorizontal className="size-3.5" />
@@ -479,7 +588,10 @@ export function WorkingTreeOverview({
         )}
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+      <div
+        ref={listRef}
+        className="min-h-0 flex-1 overflow-y-auto px-5 py-4"
+      >
         {!hasFiles ? (
           <div className="flex h-full flex-col items-center justify-center text-center">
             <div className="grid size-12 place-items-center rounded-2xl border border-jade/15 bg-jade/[0.045] text-jade/75">
@@ -502,20 +614,57 @@ export function WorkingTreeOverview({
             </Button>
           </div>
         ) : (
-          <div className="space-y-5 pb-2">
-            {groups.map((group) => (
-              <GroupSection
-                key={group.key}
-                group={group}
-                actions={actions}
-                onSelectFile={onSelectFile}
-              />
-            ))}
+          <div
+            className="relative w-full"
+            style={{ height: virtualizer.getTotalSize() }}
+          >
+            {virtualItems.map((virtualItem) => {
+              const item = items[virtualItem.index];
+              if (!item) {
+                return null;
+              }
+              return (
+                <div
+                  key={virtualItem.key}
+                  data-index={virtualItem.index}
+                  ref={virtualizer.measureElement}
+                  className="absolute left-0 top-0 w-full"
+                  style={{
+                    transform: `translateY(${virtualItem.start}px)`,
+                  }}
+                >
+                  {item.kind === "group" ? (
+                    <GroupHeader
+                      group={item.group}
+                      firstGroup={item.firstGroup}
+                    />
+                  ) : (
+                    <div
+                      className={cn(
+                        "overflow-hidden border-x border-[var(--line)] bg-[var(--surface-subtle)]",
+                        item.firstFile && "rounded-t-xl border-t",
+                        item.lastFile && "rounded-b-xl border-b",
+                      )}
+                    >
+                      <FileRow
+                        file={item.file}
+                        groupKey={item.groupKey}
+                        actions={actions}
+                        onSelect={onSelectFile}
+                        scope={item.scope}
+                        firstFile={item.firstFile}
+                      />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
       <StashPanel
         repoPath={snapshot.path}
+        conflictedCount={summary.conflicted}
         onChanged={onRefresh}
         onError={onStashError}
       />

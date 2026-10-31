@@ -5,6 +5,7 @@ use super::command::{output_failure, run_git, run_git_checked, text_output};
 use super::config;
 use super::diff;
 use super::error::GitError;
+use super::repo_state;
 use super::repository;
 use super::status;
 use super::sync;
@@ -135,6 +136,7 @@ pub(crate) fn amend(
     }
 
     config::ensure_identity(worktree)?;
+    repo_state::ensure_commit_allowed(worktree)?;
 
     let mut args = vec!["commit", "--amend"];
     if let Some(message) = message {
@@ -164,6 +166,14 @@ pub(crate) fn commit_with_author(
     author_email: Option<&str>,
     no_verify: bool,
 ) -> Result<CommitResult, GitError> {
+    let staged_check = run_git(worktree, ["diff", "--cached", "--quiet"])?;
+    if staged_check.status.success() {
+        return Err(GitError::empty_staging_area());
+    }
+    if staged_check.status.code() != Some(1) {
+        return Err(GitError::command_failed("检查暂存区失败。"));
+    }
+
     let title = validate_title(title)?;
     let body = body.map(str::trim).filter(|value| !value.is_empty());
     let author = match (author_name, author_email) {
@@ -176,14 +186,7 @@ pub(crate) fn commit_with_author(
         }
     };
 
-    let staged_check = run_git(worktree, ["diff", "--cached", "--quiet"])?;
-    if staged_check.status.success() {
-        return Err(GitError::invalid_input("当前没有已暂存的文件，无法提交。"));
-    }
-    if staged_check.status.code() != Some(1) {
-        return Err(GitError::command_failed("检查暂存区失败。"));
-    }
-
+    repo_state::ensure_commit_allowed(worktree)?;
     config::ensure_identity(worktree)?;
 
     let mut args = vec!["commit"];
@@ -220,6 +223,55 @@ pub(crate) fn commit_with_author(
         return Err(GitError::invalid_output("提交成功，但无法读取新的 HEAD。"));
     }
 
+    Ok(CommitResult {
+        oid,
+        short_oid,
+        snapshot: repository::snapshot_at_root(worktree)?,
+    })
+}
+
+/// Explicit secondary path for an empty commit. It refuses to run while the
+/// staging area has changes, so it cannot silently absorb real work.
+pub(crate) fn empty_commit(
+    worktree: &Path,
+    title: &str,
+    body: Option<&str>,
+) -> Result<CommitResult, GitError> {
+    let staged_check = run_git(worktree, ["diff", "--cached", "--quiet"])?;
+    if staged_check.status.code() != Some(0) {
+        return Err(if staged_check.status.code() == Some(1) {
+            GitError::invalid_input(
+                "存在已暂存变更，请使用普通提交；空提交只允许在暂存区为空时使用。",
+            )
+        } else {
+            GitError::command_failed("检查暂存区失败。")
+        });
+    }
+    let title = validate_title(title)?;
+    let body = body.map(str::trim).filter(|value| !value.is_empty());
+    repo_state::ensure_commit_allowed(worktree)?;
+    config::ensure_identity(worktree)?;
+
+    let mut args = vec!["commit", "--allow-empty", "-m", title];
+    if let Some(body) = body {
+        args.push("-m");
+        args.push(body);
+    }
+    let output = run_git(worktree, args)?;
+    if !output.status.success() {
+        return Err(output_failure(&output));
+    }
+
+    let oid = text_output(&run_git_checked(worktree, ["rev-parse", "HEAD"])?);
+    let short_oid = text_output(&run_git_checked(
+        worktree,
+        ["rev-parse", "--short=8", "HEAD"],
+    )?);
+    if oid.is_empty() || short_oid.is_empty() {
+        return Err(GitError::invalid_output(
+            "空提交成功，但无法读取新的 HEAD。",
+        ));
+    }
     Ok(CommitResult {
         oid,
         short_oid,
@@ -284,62 +336,46 @@ pub(crate) fn commit_and_push_with_author(
 }
 
 fn classify_push_error(error: &GitError) -> PushOutcome {
+    if let Some(outcome) = error.fetch_outcome {
+        return match outcome {
+            super::types::FetchOutcome::AuthFailed => PushOutcome::AuthFailed,
+            super::types::FetchOutcome::CredentialHelperMissing => {
+                PushOutcome::CredentialHelperMissing
+            }
+            super::types::FetchOutcome::SshKeyNotLoaded => PushOutcome::SshKeyNotLoaded,
+            super::types::FetchOutcome::HostKeyUnknown => PushOutcome::HostKeyUnknown,
+            super::types::FetchOutcome::NetworkError => PushOutcome::NetworkError,
+            // Non-fast-forward is push-only and has no bucket in FetchOutcome.
+            super::types::FetchOutcome::Other => {
+                classify_rejected_push(&error.message).unwrap_or(PushOutcome::Other)
+            }
+        };
+    }
     if error.kind == super::error::GitErrorKind::Timeout {
         return PushOutcome::NetworkError;
     }
-    let message = error.message.to_lowercase();
-    let auth_markers = [
-        "authentication failed",
-        "permission denied",
-        "could not read username",
-        "could not read password",
-        "invalid username or password",
-        "access denied",
-        "401",
-        "403",
-        "support for password authentication",
-    ];
-    if auth_markers.iter().any(|marker| message.contains(marker)) {
-        return PushOutcome::AuthFailed;
-    }
-    let non_fast_forward_markers = [
+    classify_rejected_push(&error.message).unwrap_or(PushOutcome::Other)
+}
+
+fn classify_rejected_push(message: &str) -> Option<PushOutcome> {
+    let message = message.to_lowercase();
+    const REJECTED: [&str; 5] = [
         "non-fast-forward",
         "updates were rejected",
         "fetch first",
         "failed to push some refs",
         "! [rejected]",
     ];
-    if non_fast_forward_markers
+    REJECTED
         .iter()
         .any(|marker| message.contains(marker))
-    {
-        return PushOutcome::NonFastForward;
-    }
-    let network_markers = [
-        "could not resolve host",
-        "unable to access",
-        "connection refused",
-        "connection reset",
-        "timed out",
-        "network is unreachable",
-        "failed to connect",
-        "could not read from remote repository",
-        "ssl",
-        "proxy",
-    ];
-    if network_markers
-        .iter()
-        .any(|marker| message.contains(marker))
-    {
-        return PushOutcome::NetworkError;
-    }
-    PushOutcome::Other
+        .then_some(PushOutcome::NonFastForward)
 }
 
 fn validate_title(title: &str) -> Result<&str, GitError> {
     let title = title.trim();
     if title.is_empty() {
-        return Err(GitError::invalid_input("提交标题不能为空。"));
+        return Err(GitError::empty_commit_message());
     }
     if title
         .chars()
@@ -497,42 +533,68 @@ mod tests {
 
     #[test]
     fn classifies_push_failures() {
-        let error = |kind, message: &str| GitError {
+        use super::super::types::FetchOutcome;
+
+        let error = |kind, message: &str, outcome: Option<FetchOutcome>| GitError {
             kind,
             message: message.to_owned(),
+            fetch_outcome: outcome,
         };
-        assert_eq!(
-            classify_push_error(&error(
-                super::super::error::GitErrorKind::Timeout,
-                "timeout"
-            )),
-            PushOutcome::NetworkError
-        );
+        // Remote failures carry the classification decided by `remote_auth`.
         assert_eq!(
             classify_push_error(&error(
                 super::super::error::GitErrorKind::CommandFailed,
-                "fatal: Authentication failed for 'https://example.com'"
+                "fatal: Authentication failed",
+                Some(FetchOutcome::AuthFailed)
             )),
             PushOutcome::AuthFailed
         );
         assert_eq!(
             classify_push_error(&error(
                 super::super::error::GitErrorKind::CommandFailed,
-                "! [rejected] main -> main (non-fast-forward)"
+                "fatal: Authentication failed",
+                Some(FetchOutcome::CredentialHelperMissing)
+            )),
+            PushOutcome::CredentialHelperMissing
+        );
+        assert_eq!(
+            classify_push_error(&error(
+                super::super::error::GitErrorKind::CommandFailed,
+                "fatal: unable to access: Could not resolve host",
+                Some(FetchOutcome::NetworkError)
+            )),
+            PushOutcome::NetworkError
+        );
+        // Rejected pushes are the only push-specific classification.
+        assert_eq!(
+            classify_push_error(&error(
+                super::super::error::GitErrorKind::CommandFailed,
+                "! [rejected] main -> main (non-fast-forward)",
+                Some(FetchOutcome::Other)
             )),
             PushOutcome::NonFastForward
         );
         assert_eq!(
             classify_push_error(&error(
                 super::super::error::GitErrorKind::CommandFailed,
-                "fatal: unable to access: Could not resolve host"
+                "! [rejected] main -> main (non-fast-forward)",
+                None
+            )),
+            PushOutcome::NonFastForward
+        );
+        assert_eq!(
+            classify_push_error(&error(
+                super::super::error::GitErrorKind::Timeout,
+                "timeout",
+                None
             )),
             PushOutcome::NetworkError
         );
         assert_eq!(
             classify_push_error(&error(
                 super::super::error::GitErrorKind::InvalidInput,
-                "没有远程"
+                "没有远程",
+                None
             )),
             PushOutcome::Other
         );
@@ -578,7 +640,36 @@ mod tests {
         let repo = temp.path().join("repo");
         fs::write(repo.join("tracked.txt"), "changed\n").expect("modify file");
         stage_file(&repo, "tracked.txt").expect("stage");
-        assert!(commit(&repo, "   ", None, false).is_err());
+        let error = commit(&repo, "   ", None, false).expect_err("empty title");
+        assert_eq!(
+            error.kind,
+            super::super::error::GitErrorKind::EmptyCommitMessage
+        );
+    }
+
+    #[test]
+    fn rejects_empty_staging_area_before_commit() {
+        let temp = init_repo();
+        let repo = temp.path().join("repo");
+        let error = commit(&repo, "message", None, false).expect_err("empty index");
+        assert_eq!(
+            error.kind,
+            super::super::error::GitErrorKind::EmptyStagingArea
+        );
+    }
+
+    #[test]
+    fn creates_explicit_empty_commit_and_refuses_staged_changes() {
+        let temp = init_repo();
+        let repo = temp.path().join("repo");
+        empty_commit(&repo, "empty marker", None).expect("empty commit");
+        let subject =
+            || text_output(&run_git_checked(&repo, ["log", "-1", "--format=%s"]).expect("subject"));
+        assert_eq!(subject(), "empty marker");
+
+        fs::write(repo.join("tracked.txt"), "staged\n").expect("modify");
+        stage_file(&repo, "tracked.txt").expect("stage");
+        assert!(empty_commit(&repo, "must fail", None).is_err());
     }
 
     fn status_snapshot(repo: &Path) -> RepositorySnapshot {

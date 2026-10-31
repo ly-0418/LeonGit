@@ -3,6 +3,7 @@ use std::path::Path;
 use super::command::{output_failure, run_git, run_git_checked, text_output};
 use super::error::GitError;
 use super::remotes;
+use super::repo_state;
 use super::repository;
 use super::status;
 use super::types::{BranchInfo, RemoteBranchInfo, RenameBranchResult, RepositorySnapshot};
@@ -89,8 +90,35 @@ pub(crate) fn create(
     list(worktree)
 }
 
+pub(crate) fn create_from_detached(worktree: &Path, name: &str) -> Result<(), GitError> {
+    if repo_state::detect(worktree)? != super::repo_state::RepoState::DetachedHead {
+        return Err(GitError::invalid_input(
+            "当前不在 detached HEAD，无法使用该入口创建分支。",
+        ));
+    }
+    validate_branch_name(worktree, name)?;
+    let exists = run_git(
+        worktree,
+        [
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{name}"),
+        ],
+    )?;
+    if exists.status.success() {
+        return Err(GitError::invalid_input(format!("本地分支“{name}”已存在。")));
+    }
+    if exists.status.code() != Some(1) {
+        return Err(output_failure(&exists));
+    }
+    run_git_checked(worktree, ["switch", "-c", name])?;
+    Ok(())
+}
+
 pub(crate) fn checkout(worktree: &Path, name: &str) -> Result<RepositorySnapshot, GitError> {
     validate_branch_name(worktree, name)?;
+    repo_state::ensure_operation_allowed(worktree, "切换分支")?;
     let data = status::read(worktree)?;
 
     if data.head.branch.as_deref() == Some(name) {
@@ -128,12 +156,72 @@ pub(crate) fn checkout(worktree: &Path, name: &str) -> Result<RepositorySnapshot
     repository::snapshot_at_root(worktree)
 }
 
+pub(crate) fn set_upstream(
+    worktree: &Path,
+    branch: &str,
+    remote: &str,
+    remote_branch: &str,
+) -> Result<(), GitError> {
+    validate_branch_name(worktree, branch)?;
+    let remote = remote.trim();
+    let remote_branch = remote_branch.trim();
+    if remote.is_empty() || remote_branch.is_empty() {
+        return Err(GitError::invalid_input("远程名称和目标分支不能为空。"));
+    }
+    if remote_branch.starts_with('-')
+        || remote_branch
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+    {
+        return Err(GitError::invalid_input("远程分支名无效。"));
+    }
+
+    let remotes = remotes::list(worktree)?;
+    if !remotes.iter().any(|item| item.name == remote) {
+        return Err(GitError::invalid_input(format!("远程“{remote}”不存在。")));
+    }
+
+    let local_ref = format!("refs/heads/{branch}");
+    let local = run_git(
+        worktree,
+        ["show-ref", "--verify", "--quiet", local_ref.as_str()],
+    )?;
+    if !local.status.success() {
+        return Err(GitError::invalid_input(format!(
+            "本地分支“{branch}”不存在。"
+        )));
+    }
+
+    let target_ref = ["refs/remotes", remote, remote_branch].join("/");
+    let target = run_git(
+        worktree,
+        ["show-ref", "--verify", "--quiet", target_ref.as_str()],
+    )?;
+    if target.status.code() == Some(1) {
+        return Err(GitError::invalid_input(format!(
+            "远程分支“{remote}/{remote_branch}”不存在，未创建任何引用。"
+        )));
+    }
+    if !target.status.success() {
+        return Err(output_failure(&target));
+    }
+
+    let upstream = [remote, remote_branch].join("/");
+    let option = ["--set-upstream-to", upstream.as_str()].join("=");
+    let output = run_git(worktree, ["branch", option.as_str(), branch])?;
+    if !output.status.success() {
+        return Err(output_failure(&output));
+    }
+    Ok(())
+}
+
 pub(crate) fn delete(
     worktree: &Path,
     name: &str,
     force: bool,
 ) -> Result<Vec<BranchInfo>, GitError> {
     validate_branch_name(worktree, name)?;
+    repo_state::ensure_operation_allowed(worktree, "删除分支")?;
     let data = status::read(worktree)?;
     if data.head.branch.as_deref() == Some(name) {
         return Err(GitError::invalid_input(
@@ -429,6 +517,59 @@ mod tests {
         git(&repo, &["add", "file.txt"]);
         git(&repo, &["commit", "-q", "-m", "initial"]);
         temp
+    }
+
+    #[test]
+    fn creates_branch_from_detached_and_saves_commit() {
+        let temp = init_repo();
+        let repo = temp.path().join("repo");
+        git(&repo, &["checkout", "--detach", "HEAD"]);
+        fs::write(repo.join("detached.txt"), "saved\n").expect("detached file");
+        git(&repo, &["add", "detached.txt"]);
+        git(&repo, &["commit", "-q", "-m", "detached commit"]);
+        let snapshot = repository::snapshot_at_root(&repo).expect("detached snapshot");
+        assert!(snapshot.head.detached);
+        assert!(snapshot.detached_unsaved);
+
+        create_from_detached(&repo, "saved-work").expect("create from detached");
+        let snapshot = repository::snapshot_at_root(&repo).expect("normal snapshot");
+        assert_eq!(
+            snapshot.repo_state,
+            crate::git_engine::repo_state::RepoState::Normal
+        );
+        assert_eq!(snapshot.head.branch.as_deref(), Some("saved-work"));
+        assert!(!snapshot.detached_unsaved);
+        assert!(list(&repo)
+            .expect("branches")
+            .iter()
+            .any(|branch| branch.name == "saved-work"));
+        assert!(create_from_detached(&repo, "another").is_err());
+    }
+
+    #[test]
+    fn sets_existing_upstream_and_rejects_missing_target() {
+        let temp = init_repo();
+        let repo = temp.path().join("repo");
+        git(
+            &repo,
+            &["remote", "add", "origin", "https://example.com/repo.git"],
+        );
+        git(&repo, &["update-ref", "refs/remotes/origin/dev", "HEAD"]);
+        create(&repo, "feature", None).expect("create feature");
+
+        set_upstream(&repo, "feature", "origin", "dev").expect("set upstream");
+        let output = Command::new("git")
+            .current_dir(&repo)
+            .args(["rev-parse", "--abbrev-ref", "feature@{upstream}"])
+            .output()
+            .expect("upstream query");
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "origin/dev");
+
+        let error =
+            set_upstream(&repo, "feature", "origin", "missing").expect_err("missing remote branch");
+        assert_eq!(error.kind, super::super::error::GitErrorKind::InvalidInput);
+        assert!(error.message.contains("不存在"));
     }
 
     #[test]

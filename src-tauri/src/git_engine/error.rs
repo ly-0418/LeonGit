@@ -2,6 +2,8 @@ use std::fmt;
 
 use serde::Serialize;
 
+use super::types::FetchOutcome;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum GitErrorKind {
@@ -10,6 +12,8 @@ pub enum GitErrorKind {
     InvalidPath,
     InvalidInput,
     IdentityMissing,
+    EmptyStagingArea,
+    EmptyCommitMessage,
     WorktreeDirty,
     CommandFailed,
     Timeout,
@@ -17,12 +21,17 @@ pub enum GitErrorKind {
     Io,
 }
 
-/// A typed, UI-safe failure. Raw process output never crosses the IPC boundary.
+/// A typed failure. Process output is reduced to a redacted, length-limited
+/// message before crossing IPC; remote auth failures also carry a guidance kind.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitError {
     pub kind: GitErrorKind,
     pub message: String,
+    /// Populated for remote authentication/network failures so the UI can
+    /// show credential guidance without parsing localized stderr.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fetch_outcome: Option<FetchOutcome>,
 }
 
 impl GitError {
@@ -30,7 +39,13 @@ impl GitError {
         Self {
             kind,
             message: message.into(),
+            fetch_outcome: None,
         }
+    }
+
+    pub fn with_fetch_outcome(mut self, outcome: FetchOutcome) -> Self {
+        self.fetch_outcome = Some(outcome);
+        self
     }
 
     pub fn git_not_found() -> Self {
@@ -61,6 +76,17 @@ impl GitError {
 
     pub fn identity_missing(message: impl Into<String>) -> Self {
         Self::new(GitErrorKind::IdentityMissing, message)
+    }
+
+    pub fn empty_staging_area() -> Self {
+        Self::new(
+            GitErrorKind::EmptyStagingArea,
+            "没有已暂存的变更，无法提交。",
+        )
+    }
+
+    pub fn empty_commit_message() -> Self {
+        Self::new(GitErrorKind::EmptyCommitMessage, "提交消息不能为空。")
     }
 
     pub fn command_failed(message: impl Into<String>) -> Self {

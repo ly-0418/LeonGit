@@ -4,15 +4,33 @@ export type GitErrorKind =
   | "invalidPath"
   | "invalidInput"
   | "identityMissing"
+  | "emptyStagingArea"
+  | "emptyCommitMessage"
   | "worktreeDirty"
   | "commandFailed"
   | "timeout"
   | "invalidOutput"
   | "io";
 
+export type FetchOutcome =
+  | "authFailed"
+  | "credentialHelperMissing"
+  | "sshKeyNotLoaded"
+  | "hostKeyUnknown"
+  | "networkError"
+  | "other";
+
 export interface GitError {
   kind: GitErrorKind;
   message: string;
+  fetchOutcome?: FetchOutcome;
+}
+
+export interface RemoteAuthInfo {
+  credentialHelper: string | null;
+  remoteUrl: string | null;
+  remoteUrlRedacted: boolean;
+  urlKind: "https" | "http" | "ssh" | "other";
 }
 
 export interface HeadState {
@@ -57,6 +75,16 @@ export interface WorkingTreeFiles {
   conflicted: StatusFile[];
 }
 
+export type RepoState =
+  | "normal"
+  | "merging"
+  | "rebasing"
+  | "cherryPicking"
+  | "reverting"
+  | "bisecting"
+  | "detachedHead"
+  | "amInProgress";
+
 export interface RepositorySnapshot {
   path: string;
   name: string;
@@ -64,7 +92,11 @@ export interface RepositorySnapshot {
   workingTree: WorkingTreeSummary;
   files: WorkingTreeFiles;
   commitCount: number;
+  repoState: RepoState;
+  detachedUnsaved: boolean;
   revertInProgress: boolean;
+  /** 进行中的 Squash 合并来源分支（由客户端标记文件持久化）。 */
+  squashSource: string | null;
 }
 
 export type ConfigSource = "local" | "inherited";
@@ -96,6 +128,8 @@ export interface FileDiff {
   lines: DiffLine[];
   isBinary: boolean;
   truncated: boolean;
+  hasInvalidUtf8: boolean;
+  totalLines: number;
 }
 
 export type CommitRefKind = "branch" | "remote" | "tag";
@@ -183,6 +217,9 @@ export interface CommitResult {
 export type PushOutcome =
   | "success"
   | "authFailed"
+  | "credentialHelperMissing"
+  | "sshKeyNotLoaded"
+  | "hostKeyUnknown"
   | "nonFastForward"
   | "networkError"
   | "other";
@@ -195,7 +232,7 @@ export interface CommitPushResult {
   snapshot: RepositorySnapshot;
 }
 
-export type MergeOutcome = "success" | "conflict";
+export type MergeOutcome = "success" | "conflict" | "squashReady" | "noChanges";
 
 export interface MergeResult {
   outcome: MergeOutcome;
@@ -245,6 +282,14 @@ export interface StashEntry {
   shortOid: string;
   message: string;
   timestamp: number;
+}
+
+export type StashOutcome = "applied" | "conflict";
+
+export interface StashResult {
+  outcome: StashOutcome;
+  conflicts: number;
+  message: string;
 }
 
 export type SyncAction = "fetch" | "pull" | "push";

@@ -8,6 +8,7 @@ import {
   UserRound,
   RotateCcw,
   RotateCw,
+  Undo2,
 } from "lucide-react";
 import { useMemo } from "react";
 
@@ -29,6 +30,7 @@ interface CommitDetailProps {
   oid: string;
   onBack: () => void;
   onRevert: (oid: string) => void;
+  onSoftReset: (oid: string) => void;
 }
 
 function CommitFileRow({
@@ -75,6 +77,7 @@ export function CommitDetail({
   oid,
   onBack,
   onRevert,
+  onSoftReset,
 }: CommitDetailProps) {
   const controller = useCommitDetail(repoPath, oid);
   const detail = controller.detail;
@@ -115,6 +118,17 @@ export function CommitDetail({
               {detail?.subject ?? "读取提交信息…"}
             </div>
           </div>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="text-muted-foreground/55"
+            onClick={() => detail && onSoftReset(detail.oid)}
+            disabled={!detail || controller.isLoading}
+            aria-label="软回退到此提交"
+            title="软回退到此提交（保留修改）"
+          >
+            <Undo2 className="size-3.5" />
+          </Button>
           <Button
             variant="ghost"
             size="icon-sm"
@@ -312,6 +326,10 @@ export function CommitDetail({
                       lines={controller.fileDiff.lines}
                       isBinary={controller.fileDiff.isBinary}
                       truncated={controller.fileDiff.truncated}
+                      totalLines={controller.fileDiff.totalLines}
+                      hasInvalidUtf8={controller.fileDiff.hasInvalidUtf8}
+                      onLoadFull={controller.loadFullFileDiff}
+                      isLoadingFull={controller.isFileLoadingFull}
                     />
                   </div>
                 ) : (

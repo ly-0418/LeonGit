@@ -4,7 +4,7 @@
 
 ![Stage 5 亮色工作区](docs/stage-5-light.png)
 
-**当前阶段：V2 子阶段 C — Canvas DAG 只读视图与性能工程**
+**当前阶段：V2 修补 — detached HEAD 完整交互**
 
 - Tauri 2 + Rust
 - React 19 + TypeScript + Vite
@@ -108,6 +108,75 @@ V2 子阶段 C 新增：
 - 与扁平列表共享同一分页游标、`commit` 元数据和虚拟滚动；切换视图不重新拉取
 - 前端增量泳道布局：分页拉取 SHA/父子关系，只把视口行送入 Canvas
 - 5k/50k commits 首屏与滚动性能验证
+
+V2 修补：RepoState 仓库状态检测：
+
+- `git_engine::repo_state` 通过 `.git` 标记文件识别 merge/rebase/cherry-pick/revert/bisect/detached/am
+- 快照携带 `repoState`，详情面板顶部显示当前状态；写入前统一检查并给出明确指引
+- merge / pull 冲突提供 `merge --abort` 二次确认入口
+- detached HEAD 提交前提示可能产生游离 commit；Normal 状态行为保持不变
+
+V2 修补：远程凭据引导与非交互执行：
+
+- 所有远程 Git 子进程注入 `GIT_TERMINAL_PROMPT=0`、`GCM_INTERACTIVE=never`；SSH 在用户已配置的 `GIT_SSH_COMMAND` / `core.sshCommand` 基础上追加 `BatchMode`（不覆盖自定义命令，`GIT_SSH` 保持原样）
+- 远程失败区分 `AuthFailed` / `CredentialHelperMissing` / `SshKeyNotLoaded` / `HostKeyUnknown`
+- 认证错误提供只读排查弹框：credential.helper、remote URL、HTTPS/SSH 处理建议；不提供密码输入
+
+V2 修补：工作区文件列表虚拟滚动：
+
+- 已暂存 / 未暂存 / 未跟踪 / 冲突四组共用一个 `useVirtualizer` 滚动容器
+- 分组标题和文件行扁平化为虚拟项；只渲染视口附近行，2000+ 文件时 DOM 仍为数十个
+- 行高用 `measureElement` 实测，保留分组圆角、行内操作、文件选择和冲突工具入口
+
+V2 修补：Diff 二进制、超大与非 UTF-8：
+
+- 二进制 diff 只显示占位，不渲染任何文本内容
+- 默认最多返回 5,000 行，并返回 `totalLines`；前端按需要分页“加载完整 diff”
+- “加载完整 diff”单文件最多加载 50,000 行；超出后停止加载并提示其余内容在命令行查看，避免 WebView 卡死
+- 非 UTF-8 字节统一 lossy 显示，hunk 写入保持禁用以避免误写
+
+V2 修补：.gitignore 管理：
+
+- 未跟踪文件行内“忽略”入口：按文件名或目录追加到 `.gitignore`
+- 支持选择仓库中已存在的嵌套 `.gitignore`
+- 已跟踪文件只提示 `git rm --cached`，不自动取消跟踪；不自动提交
+
+V2 修补：提交前校验：
+
+- 前端提交按钮在暂存区为空/消息为空时禁用并显示原因，Ctrl/Cmd+Enter 同样受约束
+- 后端以 `git diff --cached --quiet` 退出码防御空暂存区，返回 `EmptyStagingArea` / `EmptyCommitMessage`
+- 空提交只通过独立“空提交（显式）”次级入口和 `--allow-empty` 执行，不影响普通提交
+
+V2 修补：Stash 冲突：
+
+- stash apply/pop 冲突返回 `StashResult`，工作区刷新后冲突文件进入冲突分组
+- Stash 面板显示“stash 应用产生冲突；stash 条目仍保留，解决冲突后可手动 drop”
+- 复用外部合并工具 / 标记已解决链路；不自动 drop、不自动 abort
+
+V2 修补：本地分支 upstream：
+
+- 分支行显示当前 upstream；分支操作提供“修改 upstream”
+- 弹框选择远程 + 输入/选择已有远程分支；目标必须已存在
+- 保存后刷新分支列表与当前快照的 ahead/behind；不 push、不删除远程分支
+
+V2 修补：软回退：
+
+- 提交详情提供“软回退到此提交”；二次确认显示目标 SHA 与最近 N 个提交
+- 仅执行 `git reset --soft`；变更保留在暂存区，文件内容不变
+- 目标必须存在于当前分支历史；不提供 mixed/hard reset
+
+V2 修补：Squash 合并：
+
+- 分支合并弹框增加“Squash 合并”，并提示重复 squash 的冲突风险
+- `git merge --squash` 后变更进入暂存区，不自动提交；提交表单预填 `Squash merge <branch>`
+- 重复 squash 已包含的分支时返回 `noChanges`，提示“未产生变更”，不会打开空的提交面板
+- squash 冲突复用冲突分组；来源分支写入 `.git` 标记文件，重启后仍显示“来自 …”及“中止 Squash”入口；中止执行 `reset --merge` 并清除标记
+
+V2 修补：detached HEAD：
+
+- 状态条显示 detached HEAD 与短 SHA；提供创建分支保存和回到分支快捷入口
+- 提交前提示游离 commit，可先创建新分支；提交后继续提醒
+- 切换分支时若有未关联分支的游离提交，先提示创建分支；仍可显式切换
 
 未实现（按约束）：
 
@@ -215,6 +284,18 @@ cargo tauri build --no-bundle
   ```
 - 客户端不读取、不保存代理凭据；代理连接仍由 Git / libcurl 处理。
 
+### 远程凭据与非交互
+
+- 所有 Git 子进程统一在 `git_command` 注入非交互环境：`GIT_TERMINAL_PROMPT=0`、`GCM_INTERACTIVE=never`；Fetch / Pull / Push / Clone 共用 `run_git_remote`，不存在部分命令遗漏。
+- 远程命令的 SSH 在用户配置（`GIT_SSH_COMMAND` 或 `core.sshCommand`）之后追加 `BatchMode`，因此自定义 `-i`、`ProxyCommand`、plink（改用 `-batch`）仍然生效；`GIT_SSH` 保持原样不覆盖。
+- 远程失败按退出码判定后，再用稳定的 stderr 模式细分：`AuthFailed`、`CredentialHelperMissing`、`SshKeyNotLoaded`、`HostKeyUnknown`，以及 `NetworkError` / `Other`。无 TTY 时 Git 会快速失败，不会等待输入。
+- Push 失败时，`PushOutcome` 会保留具体认证类型；“提交并推送”的失败通知提供“凭据排查”入口。
+- Fetch / Pull / Push 失败的错误条在认证类错误上提供“查看凭据排查”，弹框中只读展示：
+  - 当前 `credential.helper`（未配置时明确提示）；
+  - 当前 origin URL，并标注 HTTPS / SSH（URL 中的凭据信息隐藏）。
+- 引导文案：HTTPS 检查 Windows 凭据管理器中的凭据是否过期；SSH 检查 `ssh-add -l`、`~/.ssh/config`、key 权限，并可用 `ssh -T git@host` 验证。
+- 客户端不提供密码/token 输入框，凭据继续由系统 Git / SSH 管理。
+
 ![右下角成功与失败通知堆叠](docs/stage-5-notifications.png)
 
 ![网络无响应自动断开](docs/stage-5-timeout.png)
@@ -246,6 +327,141 @@ cargo tauri build --no-bundle
 - 工作区：干净状态、无提交状态、冲突分组。
 - 主题、字号、窗口控制与仓库切换均有明确的加载/空/错误状态。
 - 所有弹框统一为“固定标题（图标与标题同一行）+ 可滚动内容区 + 固定底部按钮”：长表单、diff、标签/Reflog 列表只在中间区域滚动，关闭按钮与确认/取消按钮始终可见。
+
+## 工作区文件列表虚拟滚动
+
+- 与提交历史一致，使用 `@tanstack/react-virtual` 的 `useVirtualizer`。
+- 四类变更（冲突 / 已暂存 / 未暂存 / 未跟踪）共用同一个滚动容器：分组标题与文件行被扁平化为单个虚拟列表，不会为每个分组创建独立滚动区。
+- 仅渲染视口和 overscan 范围内的分组标题/文件行；行高通过 `measureElement` 实测，适配两行路径信息与操作按钮。
+- 分组标题、文件行操作（取消暂存 / 暂存 / 丢弃 / 合并工具 / 标记已解决）、文件 diff 选择和整文件暂存逻辑保持不变。
+- 切换分支或 HEAD 变化时滚动位置回到顶部；同一分支内暂存/刷新保持当前位置。
+- 文件行仍是原生 `button`，可用 Tab 聚焦并 Enter/Space 操作；未额外引入方向键导航。
+
+实测 2,500 个未暂存文件：列表首屏约 0.8 秒可操作，虚拟列表 DOM 为 22–24 个节点（含分组标题），滚动到底部仍为 24 个节点。
+
+![2,500 个变更文件的虚拟滚动工作区](docs/v2-worktree-virtual.png)
+
+## Diff 边界处理
+
+- 二进制：Rust 解析 `Binary files ... differ` / `GIT binary patch`（以及 numstat `-` 标记）并返回 `isBinary`；前端只显示“二进制文件已变更，无法显示文本 diff”，不渲染任何内容行。
+- 超大 diff：`get_file_diff` 默认最多返回 **5,000 行**，同时返回 `totalLines` 与 `truncated`；前端显示“diff 过大，已截断显示前 N / 总数 行”，并提供“加载完整 diff”次级入口。
+- 懒加载：`get_file_diff_window` / `get_commit_file_diff_window` 按 `offset + limit` 每次最多 5,000 行返回；前端点击“加载完整 diff”后分页追加，单文件累计上限 50,000 行，超出后停止并提示在命令行查看，避免单次 IPC 传输与渲染超大 payload。
+- 非 UTF-8：Git 输出统一用 `String::from_utf8_lossy`，非法字节显示为 `�`；`hasInvalidUtf8` 为 true 时显示提示并禁用 hunk 暂存/行级丢弃，防止把替换字符写回仓库。
+- 二进制、超大 diff 和编码处理同时覆盖工作区 diff、HEAD diff、提交详情 diff 与提交面板预览。
+
+![超大 diff 截断与加载完整入口](docs/v2-diff-large.png)
+
+![二进制 diff 占位](docs/v2-diff-binary.png)
+
+## .gitignore 管理
+
+- 未跟踪文件行内提供“忽略”操作，不使用客户端右键菜单（全局右键菜单仍禁用）。
+- 弹框提供两种规则：
+  - 按文件名：例如 `loose.log`；
+  - 按目录：例如 `build/`，对未跟踪目录条目直接忽略该目录。
+- 默认追加到根 `.gitignore`；如果仓库有多个 `.gitignore`，会列出当前文件可用的嵌套目标，可通过下拉选择。
+- Rust `add_to_gitignore` 只追加规则，已存在完全相同的行时不重复写入；根 `.gitignore` 不存在时会创建。`target_gitignore` 只接受仓库内已存在的 `.gitignore`（根除外）。
+- 写入后调用 `check_ignored`（`git check-ignore -q`，按退出码）确认；工作区快照刷新，目标文件从“未跟踪”分组消失。
+- 已跟踪文件不写入规则，只显示：
+  `需要先 git rm --cached <file>`，并给出手动命令；不自动执行、不删除文件、不取消跟踪。
+- 不提供完整 `.gitignore` 编辑器，不自动提交 `.gitignore` 变更。
+
+## 提交前校验
+
+- 工作区“提交”按钮在暂存区为空时禁用，并在按钮旁显示“没有已暂存的变更”；标题提示同样为该原因。
+- 提交面板：
+  - 暂存区为空时按钮禁用，并在底部显示“没有已暂存的变更”；
+  - 标题为空时显示“提交消息不能为空”，提交与提交并推送按钮均禁用；
+  - `Ctrl/Cmd + Enter` 与按钮走同一个 `canSubmit` 校验，不会绕过空消息或空暂存区。
+- 后端防御：
+  - `commit_with_author` 先执行 `git diff --cached --quiet`；退出码 0 返回 `EmptyStagingArea`，不执行 `git commit`；
+  - 非 Amend 提交的标题为空返回 `EmptyCommitMessage`；
+  - 两个新错误类型序列化为 `emptyStagingArea` / `emptyCommitMessage`，前端有对应中文标题。
+- 普通提交不使用 `--allow-empty`。空提交只通过工作区次级入口“空提交（显式）”：独立弹框确认、暂存区必须为空、提交消息必填、使用 `--allow-empty`；不自动触发。
+- Amend 仍允许空消息（沿用原提交消息）和空暂存区的既有行为，不受普通提交校验影响。
+
+## Stash 冲突
+
+- `stash_apply` / `stash_pop` 失败后先看 Git 退出码，再读取工作区冲突状态：
+  - 存在冲突 → 返回 `StashResult { outcome: "conflict", conflicts, message }`，不再作为普通错误抛出；
+  - 无冲突失败 → 仍返回原始错误。
+- 冲突不会生成 `MERGE_HEAD`，所以 RepoState 仍为 Normal；UI 同时依赖 `files.conflicted` 展示“冲突待解决”和 Stash 面板专属提示。
+- Stash 面板明确显示：
+  “stash 应用产生冲突；stash 条目仍保留，解决冲突后可手动 drop。”
+- 冲突文件出现在工作区“冲突”分组，继续使用 V1 的外部合并工具和“标记已解决”链路；标记解决后文件进入已暂存。
+- 不自动 drop stash，不自动 abort stash 应用；stash list 中的条目保留，用户可手动删除。
+
+## 本地分支 upstream
+
+- 分支列表每行显示当前 upstream（如 `↗ origin/main`）；没有 upstream 时不显示。
+- 分支行操作图标菜单提供“修改 upstream”，打开独立弹框。
+- 弹框：
+  - 下拉选择远程（复用 V1 `list_remotes`）；
+  - 远程分支支持输入，并用已有远程跟踪分支作为 `datalist` 建议；
+  - 显示当前 upstream；提示只修改本地配置，不会 push 或删除远程分支。
+- `set_upstream` 执行 `git branch --set-upstream-to=<remote>/<branch> <local>`：
+  - 先校验本地分支、远程名和目标 `refs/remotes/...` 是否存在；
+  - 目标不存在时返回明确错误，不静默创建任何引用；
+  - 成功后刷新分支列表和当前仓库快照，ahead/behind 按新 upstream 重新计算。
+- 写入操作在弹框内二次确认；不自动 push、不删除远程分支。
+
+## 软回退
+
+- 提交详情头部提供“软回退到此提交”次级图标操作；不提供 hard/mixed reset。
+- 弹框先调用 `count_soft_reset` 计算 `target..HEAD` 的提交数 N，确认文案包含：
+  - “将 HEAD 移动到 <sha>，最近 N 个提交的变更会保留在暂存区”
+  - “不会丢失任何文件修改”
+- `reset_soft` 只执行 `git reset --soft <target_sha>`；不改工作区、不清空索引。
+- 后端校验：
+  - SHA 格式；
+  - 目标提交存在；
+  - 目标属于当前 HEAD 历史（`git merge-base --is-ancestor`）；
+  - RepoState 允许写入。
+- 成功后前端刷新提交历史、工作区、分支 ahead/behind，并清除当前提交详情选择，避免展示已回退的旧状态。
+- 目标就是 HEAD 时确认按钮不可用；目标不存在或不在历史中会在弹框内显示明确错误。
+
+## detached HEAD 交互
+
+- `RepositorySnapshot.detachedUnsaved` 通过 `git for-each-ref --contains HEAD refs/heads` 计算：当前 detached HEAD 的提交没有本地分支引用时为 true。
+- 详情面板顶部状态条显示：
+  - “detached HEAD”
+  - 当前短 SHA
+  - “创建分支保存”按钮
+  - “回到分支…”下拉，直接复用已有 `git switch <branch>` 切换逻辑
+- 提交面板在 detached HEAD 下显示“当前不在任何分支上，提交会产生游离 commit”，并提供“创建新分支保存提交”：
+  - 调用 `create_branch_from_detached`，执行 `git switch -c <new-branch>`；
+  - 分支保存当前 HEAD 和已暂存变更，RepoState 回到 Normal；
+  - 不自动提交、不 push。
+- 用户仍可在 detached HEAD 直接提交；提交成功后的通知改为“提交已创建（detached HEAD）”，再次提醒游离 commit，并提供“创建分支保存”入口。
+- 切换分支时，如果 `detachedUnsaved` 为 true，先弹出“有游离 commit 未关联分支”确认：
+  - 创建分支保存；
+  - 仍然切换（提交失去分支引用，但可通过 reflog 找回）；
+  - 取消。
+- 选中“回到分支…”同样走该确认；无游离 commit 时直接切换。
+
+## 仓库状态检测
+
+- Rust 侧统一入口 `git_engine::repo_state::detect(worktree)`，返回 `RepoState`；每次 `RepositorySnapshot` 也携带 `repoState` 与 `squashSource`，打开、切换仓库和刷新时即时反映。
+- 只读取 Git 目录中的标记文件与 `HEAD`，不运行写命令，也不依赖 git2-rs；worktree 的 `.git` 文件会解析到实际 git dir。
+- 优先级：rebase（rebase-apply/applying 时返回 AmInProgress）> merge > cherry-pick > revert > bisect > detached HEAD。
+
+| 状态 | 检测 | UI | 写入限制 |
+| --- | --- | --- | --- |
+| Merging | `MERGE_HEAD` | “merge 进行中” + 继续/中止入口 | 禁止切换分支、merge、pull、push、删除分支；解决冲突后提交以结束 merge |
+| Rebasing | `rebase-merge/` 或 `rebase-apply/` | “rebase 进行中” | 禁止普通提交、切换分支、merge、pull、push；需在命令行 continue/abort |
+| CherryPicking | `CHERRY_PICK_HEAD` | “cherry-pick 进行中” | 同上，需命令行 continue/abort |
+| Reverting | `REVERT_HEAD` | 复用 Revert 状态条 | 禁止普通提交与写操作；使用 Revert 的 continue/abort |
+| Bisecting | `BISECT_LOG` | “bisect 进行中” | 禁止写操作；提示 `git bisect reset` |
+| DetachedHead | `HEAD` 不指向 `refs/heads/*` | “detached HEAD” + 短 SHA + 创建/回到分支入口 | 允许提交，但提交前/后提示游离 commit；切换未关联提交时二次确认 |
+| AmInProgress | `rebase-apply/applying` | “rebase apply 进行中” | 禁止写操作，需命令行完成/中止 |
+| Normal | 以上都不是 | 不显示状态条；有冲突文件时显示“冲突待解决” | 保持 V1/V1.1/V2 原有行为 |
+
+- 状态条固定在右侧详情面板顶部；即使正在查看 commit 或 diff 也可见。
+- Normal 状态下若仍有未解决冲突（例如 stash apply/pop 冲突），同样显示“冲突待解决”，继续使用冲突分组、外部合并工具和“标记已解决”链路。
+- merge 冲突额外提供 `git merge --abort` 入口，确认后恢复到合并前状态；冲突全部标记已解决后，状态条“继续”会打开提交面板完成 merge commit。pull 冲突同样复用这两个入口。
+- 中止失败时弹框保持打开并显示 Git 原始 stderr；不会自动切换分支、自动 stash 或执行其他后续操作。
+- stash apply/pop 产生冲突时继续使用既有冲突分组、外部合并工具和“标记已解决”链路。
+- 状态变化通过快照 adopt/refresh 刷新，不需要重启客户端。
 
 ## 多仓库切换
 
@@ -338,6 +554,21 @@ cargo tauri build --no-bundle
 - 退出码 0 → 成功；退出码 1 且存在冲突 → 返回冲突文件列表和快照；其他退出码 → 错误。
 - 冲突文件进入 V1 已有的“冲突”分组，可继续使用外部合并工具和标记已解决。
 - 合并本身不 push。
+
+### Squash 合并
+
+- 合并确认弹框同时提供“普通合并”和“Squash 合并”两个显式按钮。
+- 执行 `git merge --squash <source_branch>`；成功后只暂存变更，不创建提交。
+- 弹框始终提示：
+  “Squash merge 不记录合并关系，后续重复 squash 可能需要重新解决冲突；长期分支建议使用普通合并。”
+- 成功后自动打开提交面板，预填 `Squash merge <source_branch>`；用户可修改后提交，历史中只产生普通提交，没有合并父提交。
+- Squash 冲突返回 `Conflict`，冲突文件进入“冲突”分组；没有 MERGE_HEAD，RepoState 仍为 Normal。
+- Squash 冲突横幅提供“中止 Squash”，使用 `git reset --merge` 清理冲突；不自动提交、不自动 stash。
+- 不执行 push，不自动删除源分支。
+
+![Squash 成功后的预填提交面板](docs/v2-squash-ready.png)
+
+![Squash 冲突与中止入口](docs/v2-squash-conflict.png)
 
 ### 提交并推送
 
@@ -484,6 +715,14 @@ pnpm build:nsis
 pnpm build:portable
 ```
 
+验收构建（一次产出便携 exe + NSIS 安装包，并复制到固定目录）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1
+```
+
+产物固定在 `release/`：`LeonGit-<version>-portable.exe`、`LeonGit-<version>-setup.exe`，同目录的 `build-info.txt` 记录构建时间、commit、文件大小与 SHA256；`release/` 已被 `.gitignore` 忽略。加 `-SkipTests` 可跳过构建前的 Rust 测试。
+
 打包与便携数据路径见 [docs/windows-packaging.md](docs/windows-packaging.md)。
 
 ## 架构
@@ -498,6 +737,10 @@ src/
     remote-section.tsx        origin、fetch/pull/push、reflog 入口
     branch-create-dialog.tsx  从 HEAD/指定 commit 创建分支
     branch-rename-dialog.tsx  本地分支重命名
+    set-upstream-dialog.tsx   修改本地分支 upstream
+    soft-reset-dialog.tsx     软回退范围确认与执行
+    detached-branch-dialog.tsx 从 detached HEAD 创建并切换分支
+    detached-switch-dialog.tsx 有游离 commit 时的切换确认
     merge-branch-dialog.tsx   合并分支二次确认
     amend-commit-dialog.tsx   Amend 最近一次提交
     branch-delete-dialog.tsx  未合并分支强确认
@@ -507,7 +750,12 @@ src/
     remote-dialog.tsx         远程地址列表、新增与 URL 编辑
     reflog-dialog.tsx         Reflog 只读列表
     stash-panel.tsx           Stash 保存、列表、应用、弹出、单条删除
-    working-tree-overview.tsx 冲突分组、Stash 次级区域、Amend 入口
+    working-tree-overview.tsx 冲突分组、四类文件虚拟滚动、Stash 次级区域、Amend 入口
+    repo-state-banner.tsx      merge/rebase/bisect/detached 状态与中止入口
+    merge-abort-dialog.tsx    merge --abort 二次确认
+    auth-help-dialog.tsx      凭据助手、remote URL 与 HTTPS/SSH 排查引导
+    gitignore-dialog.tsx      忽略方式、目标 .gitignore 与已跟踪文件提示
+    empty-commit-dialog.tsx   显式空提交的独立确认与消息校验
     commit-history.tsx        分页 + 虚拟滚动 + 提交搜索 + 列表/DAG 切换
     dag-canvas.tsx            Canvas 只读 DAG 泳道与连线，只绘制视口行
     diff-view.tsx             diff、比较层、Hunk 暂存、行级丢弃确认
@@ -532,27 +780,32 @@ src/
   lib/
     git-api.ts                唯一 Git IPC 封装；不存在前端 Git 命令
     dag-layout.ts             纯函数泳道布局（lanes 状态、合并/分叉、行包装）
+    repo-state.ts             状态标签、说明与写入阻止判定
     ui-api.ts                 UI 偏好与仓库列表 IPC 封装
 src-tauri/src/
   ui_state.rs                 主题、字号、repos.json 稳定 id 与原子写入
 src-tauri/src/git_engine/
   command.rs                  无 shell 的 Git CLI 封装；远程超时与进程树终止
   repository.rs               仓库发现、初始化与快照
-  branches.rs                 分支列表、创建、切换、删除、重命名、远程恢复
+  repo_state.rs               merge/rebase/cherry-pick/revert/bisect/detached 检测
+  reset.rs                    reset --soft 范围校验、计数与执行
+  remote_auth.rs              远程认证失败分类、credential.helper 与 URL 只读信息
+  gitignore.rs                .gitignore 追加、check-ignore 与目标文件发现
+  branches.rs                 分支列表、创建、切换、删除、重命名、upstream、detached 分支保存、远程恢复
   remotes.rs                  远程列表、add、set-url
   log.rs                      分页历史、搜索、--follow 文件历史
   blame.rs                    porcelain blame 解析与行范围聚合
   tags.rs                     本地标签列表、附注/轻量创建、删除
   file_content.rs             Blame 文件文本读取
-  stash.rs                    stash push/list/apply/pop/drop
+  stash.rs                    stash push/list/apply/pop/drop 与冲突结果
   hunk.rs                     hunk patch 校验、apply --cached 与行级 discard --reverse
   revert.rs                   revert / continue / abort 与 REVERT_HEAD 状态
-  actions.rs                  暂存、提交、Amend、提交并推送、no_verify
+  actions.rs                  暂存、提交、空提交、Amend、提交并推送、no_verify
   sync.rs                     fetch / pull / push
-  merge.rs                    分支合并、外部合并工具、标记已解决
+  merge.rs                    分支合并、Squash 合并、merge --abort/reset --merge、外部合并工具、标记已解决
   reflog.rs                   HEAD reflog 只读
   status.rs                   porcelain v2 -z 解析
-  diff.rs                     类型化 diff、行号与截断保护
+  diff.rs                     类型化 diff、行号、二进制/超大/非 UTF-8 边界、分页窗口
   commit_detail.rs            提交元数据、文件列表、提交文件 diff
   config.rs / clone.rs        Stage 1 仓库配置与克隆
 src-tauri/windows/
@@ -595,11 +848,17 @@ src-tauri/windows/
 | Command | 参数 | 返回 |
 | --- | --- | --- |
 | `open_repository` | `path` | `RepositorySnapshot` |
+| `remote_auth_info` | `repoPath` | `RemoteAuthInfo` |
+| `merge_abort` | `repoPath` | `void` |
 | `init_repository` | `path, initialBranch` | `void` |
 | `clone_repository` | `url, targetPath` | `RepositorySnapshot` |
 | `get_repository_config` | `repoPath` | `RepositoryConfig` |
 | `save_repository_identity` | `repoPath, name, email` | `RepositoryConfig` |
 | `get_file_diff` | `repoPath, path, originalPath, scope` | `FileDiff` |
+| `get_file_diff_window` | `repoPath, path, originalPath, scope, offset, limit` | `FileDiff` |
+| `add_to_gitignore` | `repoPath, pattern, targetGitignore` | `void` |
+| `check_ignored` | `repoPath, path` | `boolean` |
+| `list_gitignore_files` | `repoPath` | `string[]` |
 | `list_commits` | `repoPath, offset, limit` | `CommitPage` |
 | `search_commits` | `repoPath, pattern, page, pageSize` | `CommitPage` |
 | `file_history` | `repoPath, filePath, page, pageSize` | `CommitPage` |
@@ -614,8 +873,11 @@ src-tauri/windows/
 | `discard_lines` | `repoPath, filePath, reversePatch` | `void` |
 | `unstage_file` | `repoPath, path, originalPath` | `RepositorySnapshot` |
 | `discard_file` | `repoPath, path, originalPath` | `RepositorySnapshot` |
-| `get_staged_diffs` | `repoPath` | `FileDiff[]` |
+| `get_staged_diffs` | `repoPath, offset, limit` | `FileDiff[]` |
 | `commit_staged` | `repoPath, title, body, noVerify` | `CommitResult` |
+| `commit_empty` | `repoPath, title, body` | `CommitResult` |
+| `count_soft_reset` | `repoPath, targetSha` | `number` |
+| `reset_soft` | `repoPath, targetSha` | `void` |
 | `commit_staged_with_author` | `repoPath, title, body, authorName, authorEmail, noVerify` | `CommitResult` |
 | `commit_and_push` | `repoPath, title, body, noVerify` | `CommitPushResult` |
 | `commit_and_push_with_author` | `repoPath, title, body, authorName, authorEmail, noVerify` | `CommitPushResult` |
@@ -625,8 +887,11 @@ src-tauri/windows/
 | `amend_commit` | `repoPath, message, includeStaged` | `void` |
 | `get_commit_detail` | `repoPath, oid` | `CommitDetail` |
 | `get_commit_file_diff` | `repoPath, oid, path, originalPath` | `FileDiff` |
+| `get_commit_file_diff_window` | `repoPath, oid, path, originalPath, offset, limit` | `FileDiff` |
 | `list_branches` | `repoPath` | `BranchInfo[]` |
 | `create_branch` | `repoPath, name, startPoint` | `BranchInfo[]` |
+| `create_branch_from_detached` | `repoPath, branchName` | `void` |
+| `set_upstream` | `repoPath, branch, remote, remoteBranch` | `void` |
 | `checkout_branch` | `repoPath, name` | `RepositorySnapshot` |
 | `delete_branch` | `repoPath, name, force` | `BranchInfo[]` |
 | `rename_branch` | `repoPath, oldName, newName` | `RenameBranchResult` |
@@ -640,13 +905,15 @@ src-tauri/windows/
 | `pull_current_branch` | `repoPath` | `SyncResult` |
 | `push_current_branch` | `repoPath` | `SyncResult` |
 | `merge_branch` | `repoPath, sourceBranch` | `MergeResult` |
+| `merge_branch_squash` | `repoPath, sourceBranch, message` | `MergeResult` |
+| `squash_merge_abort` | `repoPath` | `void` |
 | `open_merge_tool` | `repoPath, path` | `RepositorySnapshot` |
 | `mark_conflict_resolved` | `repoPath, path` | `RepositorySnapshot` |
 | `list_reflog` | `repoPath, limit` | `ReflogEntry[]` |
 | `stash_push` | `repoPath, message, includeUntracked` | `void` |
 | `stash_list` | `repoPath` | `StashEntry[]` |
-| `stash_apply` | `repoPath, index, restoreIndex` | `void` |
-| `stash_pop` | `repoPath, index, restoreIndex` | `void` |
+| `stash_apply` | `repoPath, index, restoreIndex` | `StashResult` |
+| `stash_pop` | `repoPath, index, restoreIndex` | `StashResult` |
 | `stash_drop` | `repoPath, index` | `void` |
 | `load_ui_state` | — | `UiState` |
 | `save_ui_preferences` | `theme, fontScale` | `void` |
@@ -1160,6 +1427,105 @@ git -C work diff --name-only --diff-filter=U
 4. 再次提交应成功，无需重启客户端；`git config --local --get user.name` 与 `user.email` 应可读到新值。
 5. “提交并推送”在身份缺失时应返回同样的具体提示，而不是原始 Git identity 错误。
 
+### 32. 仓库进行中状态
+
+1. 在命令行制造 merge 冲突后打开仓库：右侧顶部显示“merge 进行中”，冲突文件出现在冲突分组。
+2. 点击其他分支：提示“切换分支已阻止：当前处于 merge 进行中……请先完成或中止 merge”，HEAD 不变。
+3. 解决并标记全部冲突后，“继续”按钮可用；点击打开提交面板，提交后 merge 结束、状态回到 Normal。
+4. 点击状态条“中止 merge”，确认文案应明确“将放弃本次 merge 的所有冲突解决进度，工作区恢复到 merge 之前”；确认后状态条消失、工作区恢复干净。
+5. 在命令行执行 `git bisect start` 制造 bisect 后打开仓库：显示“bisect 进行中”，提交按钮禁用，并提示 `git bisect reset`。
+6. 在命令行 `git checkout --detach` 后暂存文件并打开提交面板：显示“游离 HEAD……是否先创建分支保存？”，仍可确认提交，但会明确说明会产生游离 commit。
+7. 在 rebase / cherry-pick / revert 进行中：普通提交与 Pull/Push/切换分支/合并均被阻止，并显示对应的 continue/abort 指引；Revert 继续复用原有 continue/abort 入口。
+8. Normal 状态下重复 V1/V1.1/V2 的日常操作，行为与之前一致。
+
+### 33. 远程凭据失败
+
+1. 在无可用 SSH key 的环境中对 SSH remote 执行 Push：应快速失败而不是等待输入，客户端显示 `SshKeyNotLoaded` 或 `AuthFailed` 对应的中文标题。
+2. 在 HTTPS 凭据过期的环境中 Push：错误条出现“查看凭据排查”，弹框显示当前 `credential.helper` 与 origin URL，并标注 HTTPS。
+3. 将 remote 改为 SSH URL：弹框标注 SSH，展示 `ssh-add -l`、`~/.ssh/config` 和 key 权限提示。
+4. 断开凭据助手（`credential.helper` 为空）后对 HTTPS 执行 Push：错误标题为“未配置 Git 凭据助手”，弹框明确提示未配置。
+5. 依次执行 Fetch / Pull / Push，并尝试 Clone 一个需要认证的远程：命令均不会因等待终端输入而冻结；所有失败都有明确错误。
+6. 应用内不存在密码或 token 输入框；凭据仍由系统 Git / SSH 管理。
+
+### 34. 工作区文件列表虚拟滚动
+
+1. 在一个有 2,500 个变更文件的仓库打开工作区：列表首屏可操作，分组标题仍显示正确数量。
+2. 用 DevTools 统计 `[data-index]` 虚拟项：首屏约 22–24 个，不随 2,500 总量增长。
+3. 滚动到列表底部：出现末尾文件，虚拟项数量仍保持数十个。
+4. 点击首行的“暂存”：已暂存/未暂存计数与分组立即更新，滚动和行内操作不失效。
+5. 在允许切换分支的干净场景切换分支，或刷新导致 HEAD 变化：列表回到顶部，四类分组顺序仍为冲突、已暂存、未暂存、未跟踪；脏工作区仍按既有规则拦截切换。
+6. 文件行仍可用 Tab 聚焦并通过 Enter/Space 打开 diff；行内操作按钮保持可用。
+
+### 35. Diff 二进制、超大与非 UTF-8
+
+1. 修改一个 `.png` 后打开 diff：显示“二进制文件已变更，无法显示文本 diff”，页面中没有二进制摘要内容行。
+2. 修改一个超过 5,000 行的文件：默认显示“diff 过大，已截断显示前 5,000 / 总数 行”，并出现“加载完整 diff”。
+3. 点击“加载完整 diff”：分页追加剩余行，按钮消失，能滚动到末尾内容；超过 50,000 行的文件停止加载并提示在命令行查看。
+4. 修改一个 GBK 文件：diff 不崩溃、不空白，非法字节显示为 `�`，并提示 hunk 操作已禁用。
+5. 在提交详情中选择二进制/超大/非 UTF-8 文件：行为与工作区 diff 一致；提交面板预览也不会渲染二进制内容。
+
+### 36. .gitignore 管理
+
+1. 对未跟踪文件 `loose.log` 点击行内“忽略” → 按文件名 → 加入根 `.gitignore`：文件从“未跟踪”消失，`.gitignore` 出现 `loose.log`。
+2. 再次创建同名未跟踪文件并重复加入：`.gitignore` 中该行仍只有一条。
+3. 对未跟踪目录 `build/` 点击“忽略” → 按目录：追加 `build/`，目录从工作区消失。
+4. 对 `sub/data.tmp`：目标下拉同时出现 `.gitignore` 与 `sub/.gitignore`；选择嵌套目标后，规则写入 `sub/.gitignore`。
+5. 对已跟踪的 `tracked.txt` 点击“忽略”：只显示 `git rm --cached` 提示和手动命令，不写入 `.gitignore`，不自动取消跟踪。
+6. 上述操作都不会自动 `git add` 或提交 `.gitignore`。
+
+### 37. 提交空暂存区与空消息
+
+1. 暂存区为空时：工作区“提交”按钮禁用并显示“没有已暂存的变更”。
+2. 暂存文件后打开提交面板，标题为空：提交/提交并推送按钮禁用，标题下方显示“提交消息不能为空”。
+3. 在标题为空时按 `Ctrl/Cmd + Enter`：不提交，焦点回到标题输入框。
+4. 输入标题后按 `Ctrl/Cmd + Enter`：正常提交，提交成功通知出现。
+5. 直接用后端提交空暂存区：返回 `EmptyStagingArea`；有暂存变更但标题为空：返回 `EmptyCommitMessage`，且不执行 `git commit`。
+6. 暂存区为空时点击“空提交（显式）”：独立弹框、消息必填，确认后创建不含文件变更的提交；暂存区非空时该入口隐藏，后端也拒绝。
+7. 正常有暂存、有标题、无快捷键的提交流程保持原行为。
+
+### 38. Stash 冲突
+
+1. 用与当前工作区冲突的 stash 执行“弹出”：Stash 面板出现“stash 应用产生冲突”，并明确“stash 条目仍保留，解决冲突后可手动 drop”。
+2. 冲突文件进入工作区“冲突”分组；RepoState 可能仍为 Normal，但顶部“冲突待解决”仍出现。
+3. 使用“合并工具”或手动解决后点击“标记已解决”：文件从冲突变为已暂存，冲突提示消失。
+4. Stash 列表仍显示该条目（`STASH 1`），可手动删除；不会自动 drop、不会自动 abort。
+5. 对 stash 执行“应用”产生冲突时，表现与“弹出”一致。
+
+### 39. 本地分支 upstream
+
+1. 分支列表中 `feature` 显示 `↗ origin/main`，以及当前 ahead/behind。
+2. 点击 `feature` 的“修改 upstream”：弹框显示当前 upstream、远程下拉 `origin`、远程分支输入/建议。
+3. 将目标改为 `origin/dev` 并保存：分支列表显示 `↗ origin/dev`，behind 从原值按新 upstream 重新计算。
+4. 输入不存在的 `origin/missing` 保存：操作被拒绝，提示“远程分支不存在，未创建任何引用”。
+5. 操作后不产生 push、不删除任何远程分支。
+
+### 40. 软回退
+
+1. 在提交历史选择 `HEAD~2` 的提交，点击“软回退到此提交”：弹框显示目标 SHA 和“最近 2 个提交的变更会保留在暂存区”。
+2. 确认文案包含“不会丢失任何文件修改”；确认按钮需要显式点击。
+3. 确认后：HEAD 指向目标提交，最近两个提交从历史消失，`f.txt` 内容仍为回退前内容，状态变为已暂存。
+4. 随后可以直接重新提交；新提交成功并出现在历史中。
+5. 目标提交不存在或不属于当前分支历史时，操作被拒绝并显示错误。
+6. 客户端没有 reset --hard / --mixed 入口。
+
+### 41. Squash 合并
+
+1. 分支合并弹框显示“Squash merge 不记录合并关系，后续重复 squash 可能需要重新解决冲突；长期分支建议使用普通合并。”
+2. 点击“Squash 合并”：`feature` 变更进入暂存区，HEAD 不变，历史没有新增提交。
+3. 提交面板自动打开并预填 `Squash merge feature`；直接提交后历史只有一个普通提交，`rev-list --parents -1 HEAD` 只有一个父提交。
+4. 对冲突分支执行 Squash：冲突文件出现，显示“Squash 合并产生冲突”，并提供“中止 Squash”；关闭客户端重新打开仓库后，状态条仍显示来源分支与中止入口。
+5. 中止后使用 `git reset --merge` 清理冲突，工作区恢复干净；不自动提交或 stash。
+6. 已提交过一次 squash 后，再次对同一分支执行 Squash：不产生暂存变更，提示“Squash 未产生变更”，不打开提交面板。
+
+### 42. detached HEAD 交互
+
+1. `git checkout --detach` 后打开仓库：状态条显示 detached HEAD、短 SHA，以及“创建分支保存”和“回到分支…”入口。
+2. 暂存修改并打开提交面板：显示“当前不在任何分支上，提交会产生游离 commit”，并提供“创建新分支保存提交”。
+3. 直接提交后：通知变为“提交已创建（detached HEAD）”，再次提醒游离 commit，并提供创建分支入口。
+4. 通过“回到分支…”选择 `main`：弹出“有游离 commit 未关联分支”提示；可创建分支保存、仍然切换或取消。
+5. 选择“创建分支保存”并输入 `detached-work`：执行 `git switch -c detached-work`，RepoState 回到 Normal，游离 commit 被新分支保存。
+6. 创建分支后状态条消失，分支列表出现 `detached-work`；工作区内容不变。
+
 ## 写入确认
 
 丢弃修改、删除未合并分支和 Push 统一使用同一种确认弹窗结构：
@@ -1180,6 +1546,19 @@ git -C work diff --name-only --diff-filter=U
 - 不内置三栏合并编辑器；冲突通过系统 Git 配置的 `merge.tool` 处理。
 - 不支持交互式 rebase、cherry-pick、worktree、submodule、Git LFS。
 - Revert 冲突不会自动 continue 或 abort；必须由用户解决后显式操作。
+- 进行中状态完全由 Git 标记文件与 HEAD 推断；客户端只额外提供 merge --abort，不自动 continue/abort rebase、cherry-pick 或 bisect。
+- detached HEAD 提交前会提示，可从状态条或提交面板创建新分支保存；也可显式仍然提交，提交后继续提醒。
+- stash apply/pop 冲突没有独立标记文件，仍通过冲突分组、外部合并工具和“标记已解决”处理。
+- 远程认证始终非交互：应用不提供密码/token 输入；SSH 在用户已有命令上追加 `BatchMode`，不覆盖 `core.sshCommand` / 自定义 `GIT_SSH_COMMAND`。首次未知主机或 key 未加载需要在系统 SSH 环境中处理。
+- 凭据排查弹框显示 origin URL；如果 upstream 指向非 origin 远程，排查信息以 origin 为准。
+- 二进制图片不生成缩略图；仅显示占位。超大 diff 的“加载完整”按 5,000 行分页传输、单文件最多 50,000 行；非 UTF-8 内容禁用 hunk 写入。
+- 不提供 `.gitignore` 完整编辑器；已跟踪文件必须手动 `git rm --cached`；`.gitignore` 变更不会自动暂存或提交。
+- 普通提交始终要求非空暂存区和消息；空提交只能从“空提交（显式）”次级入口发起，且暂存区必须为空。
+- stash apply/pop 冲突不会自动 drop 或 abort；stash 条目保留，需解决冲突后手动删除。
+- 修改 upstream 只接受已存在的远程跟踪分支；不会 fetch、push 或创建/删除远程分支。
+- 软回退只支持 `reset --soft`；不提供 `--mixed` / `--hard`，目标必须是当前 HEAD 的祖先。
+- Squash 合并不记录合并关系，重复 squash 同一源分支可能需要重新解决冲突；长期分支建议使用普通合并。
+- detached HEAD 下仍允许显式提交；若不创建分支，游离 commit 仅通过 reflog/对象数据库保留，客户端不会自动创建分支或 push。
 - 行级丢弃仅适用于未暂存工作区 diff；不提供撤销，确认后不可恢复。
 - Hunk 级暂存只覆盖普通修改文件；二进制、截断 diff、重命名文件和未跟踪文件仍走整文件或 V1 路径。
 - Hunk 暂存不提供行级选择；行级能力仅用于丢弃未暂存行。

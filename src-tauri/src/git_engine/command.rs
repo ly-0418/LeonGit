@@ -1,8 +1,9 @@
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -35,6 +36,7 @@ fn git_command(cwd: &Path) -> Command {
         .arg("http.lowSpeedTime=30")
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
         .env("GIT_MERGE_AUTOEDIT", "no")
         .env("GIT_EDITOR", "true")
         .env("GIT_PAGER", "cat")
@@ -47,6 +49,77 @@ fn git_command(cwd: &Path) -> Command {
     command.creation_flags(CREATE_NO_WINDOW);
 
     command
+}
+
+/// Non-interactive SSH for network commands. The command configured by the
+/// user (`GIT_SSH_COMMAND` or `core.sshCommand`) is kept and only extended with
+/// `BatchMode`, so custom keys, `ProxyCommand` and alternate SSH clients keep
+/// working. `GIT_SSH` is left untouched because its value is a program path
+/// without arguments.
+fn ssh_command(cwd: &Path) -> Option<String> {
+    if let Ok(existing) = std::env::var("GIT_SSH_COMMAND") {
+        if !existing.trim().is_empty() {
+            return Some(with_batch_mode(&existing));
+        }
+    }
+    if let Some(configured) = configured_ssh_command(cwd) {
+        return Some(with_batch_mode(&configured));
+    }
+    if std::env::var_os("GIT_SSH").is_some() {
+        return None;
+    }
+    Some("ssh -o BatchMode=yes".to_owned())
+}
+
+fn with_batch_mode(command: &str) -> String {
+    let command = command.trim();
+    if command.is_empty() {
+        return "ssh -o BatchMode=yes".to_owned();
+    }
+    let lower = command.to_ascii_lowercase();
+    if lower.contains("batchmode") || lower.contains(" -batch") || lower.ends_with("-batch") {
+        return command.to_owned();
+    }
+    if lower.contains("plink") {
+        return format!("{command} -batch");
+    }
+    format!("{command} -o BatchMode=yes")
+}
+
+/// Reads `core.sshCommand` once per repository. Only remote commands call this,
+/// so the extra `git config` process never runs for local operations.
+fn configured_ssh_command(cwd: &Path) -> Option<String> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Option<String>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    if let Ok(cache) = cache.lock() {
+        if let Some(cached) = cache.get(cwd) {
+            return cached.clone();
+        }
+    }
+
+    let mut command = Command::new("git");
+    command
+        .current_dir(cwd)
+        .args(["config", "--get", "core.sshCommand"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let value = command.output().ok().and_then(|output| {
+        if !output.status.success() {
+            return None;
+        }
+        let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        (!value.is_empty()).then_some(value)
+    });
+
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(cwd.to_path_buf(), value.clone());
+    }
+    value
 }
 
 /// Runs git without interpreting a non-zero exit code.
@@ -105,22 +178,11 @@ where
 {
     let mut command = git_command(cwd);
     proxy::apply_to(&mut command);
+    if let Some(ssh) = ssh_command(cwd) {
+        command.env("GIT_SSH_COMMAND", ssh);
+    }
     command.args(args);
     run_command_with_timeout(command, REMOTE_IDLE_TIMEOUT, REMOTE_MAX_TIMEOUT)
-}
-
-/// Runs a network-facing Git command and turns failures into a typed error.
-pub(crate) fn run_git_remote_checked<I, S>(cwd: &Path, args: I) -> Result<Vec<u8>, GitError>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    let output = run_git_remote(cwd, args)?;
-    if output.status.success() {
-        return Ok(output.stdout);
-    }
-
-    Err(command_failure(&output))
 }
 
 /// Runs git and turns failures into a concise, typed error.
@@ -303,6 +365,24 @@ mod tests {
     fn text_output_trims_only_line_endings() {
         assert_eq!(text_output(b"  main  \r\n"), "  main  ");
         assert_eq!(text_output(b"/tmp/repo\n"), "/tmp/repo");
+    }
+
+    #[test]
+    fn composes_batch_mode_without_dropping_user_command() {
+        assert_eq!(
+            with_batch_mode("ssh -i C:/keys/work"),
+            "ssh -i C:/keys/work -o BatchMode=yes"
+        );
+        assert_eq!(
+            with_batch_mode("ssh -o BatchMode=yes"),
+            "ssh -o BatchMode=yes"
+        );
+        assert_eq!(
+            with_batch_mode("plink.exe -batch"),
+            "plink.exe -batch"
+        );
+        assert_eq!(with_batch_mode("plink.exe"), "plink.exe -batch");
+        assert_eq!(with_batch_mode(""), "ssh -o BatchMode=yes");
     }
 
     #[cfg(windows)]

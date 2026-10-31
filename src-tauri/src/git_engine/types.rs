@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::repo_state::RepoState;
+
 /// Everything the UI needs to paint the repository shell.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -10,8 +12,17 @@ pub struct RepositorySnapshot {
     pub working_tree: WorkingTreeSummary,
     pub files: WorkingTreeFiles,
     pub commit_count: u64,
-    /// True while a `git revert` conflict is waiting for continue/abort.
+    /// Current multi-step Git operation, detected from .git marker files.
+    pub repo_state: RepoState,
+    /// True when detached HEAD points at a commit not reachable from any
+    /// local branch.
+    pub detached_unsaved: bool,
+    /// Compatible convenience flag derived from `repo_state`.
     pub revert_in_progress: bool,
+    /// Source branch of a `git merge --squash` that stopped on conflicts.
+    /// Git keeps no marker for this, so it comes from a small client marker
+    /// file next to the other operation markers.
+    pub squash_source: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -123,6 +134,11 @@ pub struct FileDiff {
     pub lines: Vec<DiffLine>,
     pub is_binary: bool,
     pub truncated: bool,
+    /// True when invalid UTF-8 bytes were replaced for display; hunk-level
+    /// writes must stay disabled to avoid writing replacement characters back.
+    pub has_invalid_utf8: bool,
+    /// Total number of diff lines available for this file.
+    pub total_lines: u32,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -230,6 +246,12 @@ pub struct MergeResult {
 pub enum MergeOutcome {
     Success,
     Conflict,
+    /// `git merge --squash` staged the result without creating a commit.
+    SquashReady,
+    /// `git merge --squash` ran but the source was already contained in HEAD,
+    /// so the index stays untouched. Reported instead of a misleading
+    /// `SquashReady` with an empty staging area.
+    NoChanges,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -244,12 +266,35 @@ pub struct CommitPushResult {
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub enum FetchOutcome {
+    AuthFailed,
+    CredentialHelperMissing,
+    SshKeyNotLoaded,
+    HostKeyUnknown,
+    NetworkError,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub enum PushOutcome {
     Success,
     AuthFailed,
+    CredentialHelperMissing,
+    SshKeyNotLoaded,
+    HostKeyUnknown,
     NonFastForward,
     NetworkError,
     Other,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteAuthInfo {
+    pub credential_helper: Option<String>,
+    pub remote_url: Option<String>,
+    pub remote_url_redacted: bool,
+    pub url_kind: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -369,6 +414,21 @@ pub struct SyncResult {
     pub branch: Option<String>,
     pub conflicts: u32,
     pub snapshot: RepositorySnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StashResult {
+    pub outcome: StashOutcome,
+    pub conflicts: u32,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum StashOutcome {
+    Applied,
+    Conflict,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

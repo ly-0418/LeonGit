@@ -8,14 +8,18 @@ mod config;
 mod diff;
 mod error;
 mod file_content;
+mod gitignore;
 mod hunk;
 mod log;
 mod merge;
 mod proxy;
 mod redact;
 mod reflog;
+mod remote_auth;
 mod remotes;
+mod repo_state;
 mod repository;
+mod reset;
 mod revert;
 mod stash;
 mod status;
@@ -26,12 +30,17 @@ mod types;
 pub use error::GitError;
 pub use types::{
     BlameLineMeta, BranchInfo, CommitDetail, CommitPage, CommitPushResult, CommitResult, DiffScope,
-    FileDiff, MergeResult, ReflogEntry, RemoteBranchInfo, RemoteInfo, RenameBranchResult,
-    RepositoryConfig, RepositorySnapshot, RevertResult, StashEntry, SyncResult, TagEntry,
+    FileDiff, MergeResult, ReflogEntry, RemoteAuthInfo, RemoteBranchInfo, RemoteInfo,
+    RenameBranchResult, RepositoryConfig, RepositorySnapshot, RevertResult, StashEntry,
+    StashResult, SyncResult, TagEntry,
 };
 
 pub fn open_repository(path: &str) -> Result<RepositorySnapshot, GitError> {
     repository::snapshot(path)
+}
+
+pub fn remote_auth_info(worktree: &std::path::Path) -> Result<RemoteAuthInfo, GitError> {
+    remote_auth::info(worktree)
 }
 
 pub fn init_repository(path: &str, initial_branch: Option<&str>) -> Result<(), GitError> {
@@ -137,6 +146,33 @@ pub fn file_diff(
     diff::read(worktree, path, original_path, scope)
 }
 
+pub fn file_diff_window(
+    worktree: &std::path::Path,
+    path: &str,
+    original_path: Option<&str>,
+    scope: DiffScope,
+    offset: u32,
+    limit: u32,
+) -> Result<FileDiff, GitError> {
+    diff::read_window(worktree, path, original_path, scope, offset, limit)
+}
+
+pub fn add_to_gitignore(
+    worktree: &std::path::Path,
+    pattern: &str,
+    target_gitignore: Option<&str>,
+) -> Result<(), GitError> {
+    gitignore::add(worktree, pattern, target_gitignore)
+}
+
+pub fn check_ignored(worktree: &std::path::Path, path: &str) -> Result<bool, GitError> {
+    gitignore::is_ignored(worktree, path)
+}
+
+pub fn list_gitignore_files(worktree: &std::path::Path) -> Result<Vec<String>, GitError> {
+    gitignore::list(worktree)
+}
+
 pub fn stage_file(worktree: &std::path::Path, path: &str) -> Result<RepositorySnapshot, GitError> {
     actions::stage_file(worktree, path)
 }
@@ -198,6 +234,22 @@ pub fn commit(
     actions::commit(worktree, title, body, no_verify)
 }
 
+pub fn empty_commit(
+    worktree: &std::path::Path,
+    title: &str,
+    body: Option<&str>,
+) -> Result<CommitResult, GitError> {
+    actions::empty_commit(worktree, title, body)
+}
+
+pub fn soft_reset(worktree: &std::path::Path, target_sha: &str) -> Result<(), GitError> {
+    reset::soft_reset(worktree, target_sha)
+}
+
+pub fn soft_reset_count(worktree: &std::path::Path, target_sha: &str) -> Result<u32, GitError> {
+    reset::soft_count(worktree, target_sha)
+}
+
 pub fn amend_commit(
     worktree: &std::path::Path,
     message: Option<&str>,
@@ -257,6 +309,17 @@ pub fn commit_file_diff(
     commit_detail::file_diff(worktree, oid, path, original_path)
 }
 
+pub fn commit_file_diff_window(
+    worktree: &std::path::Path,
+    oid: &str,
+    path: &str,
+    original_path: Option<&str>,
+    offset: u32,
+    limit: u32,
+) -> Result<FileDiff, GitError> {
+    commit_detail::file_diff_window(worktree, oid, path, original_path, offset, limit)
+}
+
 pub fn branches(worktree: &std::path::Path) -> Result<Vec<BranchInfo>, GitError> {
     branches::list(worktree)
 }
@@ -267,6 +330,22 @@ pub fn create_branch(
     start_point: Option<&str>,
 ) -> Result<Vec<BranchInfo>, GitError> {
     branches::create(worktree, name, start_point)
+}
+
+pub fn set_upstream(
+    worktree: &std::path::Path,
+    branch: &str,
+    remote: &str,
+    remote_branch: &str,
+) -> Result<(), GitError> {
+    branches::set_upstream(worktree, branch, remote, remote_branch)
+}
+
+pub fn create_branch_from_detached(
+    worktree: &std::path::Path,
+    branch_name: &str,
+) -> Result<(), GitError> {
+    branches::create_from_detached(worktree, branch_name)
 }
 
 pub fn checkout_branch(
@@ -358,6 +437,21 @@ pub fn merge_branch(
     merge::merge_branch(worktree, source_branch)
 }
 
+pub fn merge_abort(worktree: &std::path::Path) -> Result<(), GitError> {
+    merge::abort_merge(worktree)
+}
+
+pub fn merge_branch_squash(
+    worktree: &std::path::Path,
+    source_branch: &str,
+) -> Result<MergeResult, GitError> {
+    merge::merge_branch_squash(worktree, source_branch)
+}
+
+pub fn abort_squash(worktree: &std::path::Path) -> Result<(), GitError> {
+    merge::abort_squash(worktree)
+}
+
 pub fn mark_resolved(
     worktree: &std::path::Path,
     path: &str,
@@ -385,7 +479,7 @@ pub fn stash_apply(
     worktree: &std::path::Path,
     index: usize,
     restore_index: bool,
-) -> Result<(), GitError> {
+) -> Result<StashResult, GitError> {
     stash::apply(worktree, index, restore_index)
 }
 
@@ -393,7 +487,7 @@ pub fn stash_pop(
     worktree: &std::path::Path,
     index: usize,
     restore_index: bool,
-) -> Result<(), GitError> {
+) -> Result<StashResult, GitError> {
     stash::pop(worktree, index, restore_index)
 }
 

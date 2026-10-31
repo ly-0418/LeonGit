@@ -6,6 +6,7 @@ import {
   CloudDownload,
   GitBranch,
   GitMerge,
+  Link2,
   Loader2,
   Pencil,
   Plus,
@@ -33,6 +34,7 @@ interface BranchSectionProps {
   onCheckout: (branch: BranchInfo) => void;
   onDelete: (branch: BranchInfo) => void;
   onRename: (branch: BranchInfo) => void;
+  onSetUpstream: (branch: BranchInfo) => void;
   onMerge: (branch: BranchInfo) => void;
   onReload: () => void;
   onRestoreRemote: () => void;
@@ -49,6 +51,7 @@ export function BranchSection({
   onCheckout,
   onDelete,
   onRename,
+  onSetUpstream,
   onMerge,
   onReload,
   onRestoreRemote,
@@ -201,6 +204,14 @@ export function BranchSection({
                 >
                   {branch.name}
                 </span>
+                {branch.upstream && (
+                  <span
+                    className="max-w-[88px] shrink-0 truncate font-mono text-[7.5px] text-muted-foreground/30"
+                    title={`upstream: ${branch.upstream}`}
+                  >
+                    ↗ {branch.upstream}
+                  </span>
+                )}
                 {!branch.isMerged && !branch.isCurrent && (
                   <span
                     className="shrink-0 rounded-full border border-rose/15 bg-rose/[0.04] px-1 text-[7px] text-rose/55"
@@ -243,6 +254,21 @@ export function BranchSection({
                   <TooltipContent>合并到当前分支</TooltipContent>
                 </Tooltip>
               )}
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => onSetUpstream(branch)}
+                    disabled={isBusy}
+                    className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground/15 opacity-0 outline-none transition-opacity hover:bg-brand/[0.07] hover:text-brand/65 focus-visible:opacity-100 group-hover:opacity-100 disabled:pointer-events-none"
+                    aria-label={`修改 ${branch.name} 的 upstream`}
+                  >
+                    <Link2 className="size-3" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>修改 upstream</TooltipContent>
+              </Tooltip>
 
               <Tooltip>
                 <TooltipTrigger asChild>

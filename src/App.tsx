@@ -3,6 +3,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AmendCommitDialog } from "@/components/amend-commit-dialog";
+import { AuthHelpDialog } from "@/components/auth-help-dialog";
 import { BlameDialog } from "@/components/blame-dialog";
 import { BootScreen } from "@/components/boot-screen";
 import { AppearanceSettingsDialog } from "@/components/appearance-settings-dialog";
@@ -13,11 +14,16 @@ import { CloneRepositoryDialog } from "@/components/clone-repository-dialog";
 import { CommitDialog } from "@/components/commit-dialog";
 import { CommitHistory } from "@/components/commit-history";
 import { DetailsPanel } from "@/components/details-panel";
+import { DetachedBranchDialog } from "@/components/detached-branch-dialog";
+import { DetachedSwitchDialog } from "@/components/detached-switch-dialog";
 import { DiscardDialog } from "@/components/discard-dialog";
 import { FileHistoryDialog } from "@/components/file-history-dialog";
+import { GitignoreDialog } from "@/components/gitignore-dialog";
 import { DragOverlay } from "@/components/drag-overlay";
+import { EmptyCommitDialog } from "@/components/empty-commit-dialog";
 import { ErrorBanner } from "@/components/error-banner";
 import { InitRepositoryDialog, repositoryName } from "@/components/init-repository-dialog";
+import { MergeAbortDialog } from "@/components/merge-abort-dialog";
 import { MergeBranchDialog } from "@/components/merge-branch-dialog";
 import { NoticeToast, type NoticeMessage } from "@/components/notice-toast";
 import { PushConfirmDialog } from "@/components/push-confirm-dialog";
@@ -26,6 +32,8 @@ import { RemoteBranchDialog } from "@/components/remote-branch-dialog";
 import { RemoteDialog } from "@/components/remote-dialog";
 import { RepositorySettingsDialog } from "@/components/repository-settings-dialog";
 import { RevertConfirmDialog } from "@/components/revert-confirm-dialog";
+import { SetUpstreamDialog } from "@/components/set-upstream-dialog";
+import { SoftResetDialog } from "@/components/soft-reset-dialog";
 import { TagDialog } from "@/components/tag-dialog";
 import { TitleBar } from "@/components/title-bar";
 import { WelcomeScreen } from "@/components/welcome-screen";
@@ -43,7 +51,10 @@ import {
   discardLines,
   fetchRemote,
   markConflictResolved,
+  mergeAbort,
   mergeBranch,
+  mergeBranchSquash,
+  squashMergeAbort,
   openMergeTool,
   openRepository,
   pullCurrentBranch,
@@ -65,16 +76,36 @@ import type {
   CommitResult,
   CommitSummary,
   DiffScope,
+  PushOutcome,
   RemoteInfo,
+  RepoState,
   RepositorySnapshot,
   StatusFile,
   SyncAction,
 } from "@/types/git";
+import { repoStateBlockMessage, repoStateInfo } from "@/lib/repo-state";
 
 function worktreeChangeCount(snapshot: RepositorySnapshot): number {
   const summary = snapshot.workingTree;
   return (
     summary.staged + summary.unstaged + summary.untracked + summary.conflicted
+  );
+}
+
+function repoStateNotice(state: RepoState, action: string): NoticeMessage {
+  return {
+    tone: "warning",
+    title: `无法${action}`,
+    message: repoStateBlockMessage(state, action),
+  };
+}
+
+function isAuthPushOutcome(outcome: PushOutcome): boolean {
+  return (
+    outcome === "authFailed" ||
+    outcome === "credentialHelperMissing" ||
+    outcome === "sshKeyNotLoaded" ||
+    outcome === "hostKeyUnknown"
   );
 }
 
@@ -100,6 +131,15 @@ export default function App() {
   const [initOpen, setInitOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [commitOpen, setCommitOpen] = useState(false);
+  const [emptyCommitOpen, setEmptyCommitOpen] = useState(false);
+  const [commitInitialMessage, setCommitInitialMessage] = useState<
+    string | null
+  >(null);
+  const [detachedBranchOpen, setDetachedBranchOpen] = useState(false);
+  const [detachedSwitchTarget, setDetachedSwitchTarget] =
+    useState<BranchInfo | null>(null);
+  const [squashAbortOpen, setSquashAbortOpen] = useState(false);
+  const [isAbortingSquash, setIsAbortingSquash] = useState(false);
   const [amendOpen, setAmendOpen] = useState(false);
   const [isAmending, setIsAmending] = useState(false);
   const [branchCreateOpen, setBranchCreateOpen] = useState(false);
@@ -107,6 +147,8 @@ export default function App() {
     useState<BranchInfo | null>(null);
   const [branchRenameTarget, setBranchRenameTarget] =
     useState<BranchInfo | null>(null);
+  const [upstreamTarget, setUpstreamTarget] = useState<BranchInfo | null>(null);
+  const [softResetTarget, setSoftResetTarget] = useState<string | null>(null);
   const [mergeTarget, setMergeTarget] = useState<BranchInfo | null>(null);
   const [remoteOpen, setRemoteOpen] = useState(false);
   const [remoteBranchesOpen, setRemoteBranchesOpen] = useState(false);
@@ -121,10 +163,17 @@ export default function App() {
   const [tagsOpen, setTagsOpen] = useState(false);
   const [revertTarget, setRevertTarget] = useState<string | null>(null);
   const [revertBusy, setRevertBusy] = useState(false);
+  const [mergeAbortOpen, setMergeAbortOpen] = useState(false);
+  const [isAbortingMerge, setIsAbortingMerge] = useState(false);
+  const [authHelpOpen, setAuthHelpOpen] = useState(false);
   const [scope, setScope] = useState<DiffScope>("worktree");
   const [indexRevision, setIndexRevision] = useState(0);
   const [discardTarget, setDiscardTarget] = useState<StatusFile | null>(null);
   const [isDiscarding, setIsDiscarding] = useState(false);
+  const [ignoreTarget, setIgnoreTarget] = useState<{
+    file: StatusFile;
+    tracked: boolean;
+  } | null>(null);
   const [isMutating, setIsMutating] = useState(false);
   const [actionPath, setActionPath] = useState<string | null>(null);
   const [branchBusy, setBranchBusy] = useState(false);
@@ -177,6 +226,10 @@ export default function App() {
     setIsDiscarding(false);
     setActionPath(null);
     setNotice(null);
+    // Squash state lives in the repository marker, but the dialogs belong to
+    // the repository that was active when they were opened.
+    setSquashAbortOpen(false);
+    setIsAbortingSquash(false);
     setHistoryRefreshToken((token) => token + 1);
     setRefsRefreshToken((token) => token + 1);
   }, []);
@@ -520,10 +573,43 @@ export default function App() {
       setScope("worktree");
       setHistoryRefreshToken((token) => token + 1);
       refreshRefs();
+      setCommitInitialMessage(null);
+      if (result.snapshot.head.detached) {
+        setNotice({
+          tone: "warning",
+          title: "提交已创建（detached HEAD）",
+          message: `当前不在任何分支上，提交 ${result.shortOid} 是游离 commit，尚未关联分支。建议创建分支保存。`,
+          action: {
+            label: "创建分支保存",
+            onClick: () => {
+              setNotice(null);
+              setDetachedBranchOpen(true);
+            },
+          },
+        });
+        return;
+      }
       setNotice({
         tone: "success",
         title: "提交成功",
         message: `${result.shortOid} 已写入本地仓库。`,
+      });
+    },
+    [adopt, refreshRefs],
+  );
+
+  const handleEmptyCommitted = useCallback(
+    (result: CommitResult) => {
+      adopt(result.snapshot);
+      setSelected(null);
+      setSelectedCommitOid(null);
+      setScope("worktree");
+      setHistoryRefreshToken((token) => token + 1);
+      refreshRefs();
+      setNotice({
+        tone: "success",
+        title: "空提交已创建",
+        message: `${result.shortOid} 不含文件变更。`,
       });
     },
     [adopt, refreshRefs],
@@ -552,6 +638,7 @@ export default function App() {
       setScope("worktree");
       setHistoryRefreshToken((token) => token + 1);
       refreshRefs();
+      setCommitInitialMessage(null);
       if (result.push === "success") {
         setNotice({
           tone: "success",
@@ -559,17 +646,30 @@ export default function App() {
           message: `${result.commitShortSha} 已推送。`,
         });
       } else {
+        const authFailure = isAuthPushOutcome(result.push);
         setNotice({
           tone: "warning",
-          title: "提交成功，推送失败",
-          message: `${result.pushMessage} 提交 ${result.commitShortSha} 已保留；可在远程区点击 Push 重试。`,
-          action: {
-            label: "重试 Push",
-            onClick: () => {
-              setNotice(null);
-              setPushOpen(true);
-            },
-          },
+          title: authFailure ? "提交成功，推送认证失败" : "提交成功，推送失败",
+          message: `${result.pushMessage} 提交 ${result.commitShortSha} 已保留；${
+            authFailure
+              ? "请检查 Git 凭据配置后重试 Push。"
+              : "可在远程区点击 Push 重试。"
+          }`,
+          action: authFailure
+            ? {
+                label: "凭据排查",
+                onClick: () => {
+                  setNotice(null);
+                  setAuthHelpOpen(true);
+                },
+              }
+            : {
+                label: "重试 Push",
+                onClick: () => {
+                  setNotice(null);
+                  setPushOpen(true);
+                },
+              },
         });
       }
       return result;
@@ -610,8 +710,15 @@ export default function App() {
   );
 
   const handleCheckout = useCallback(
-    async (branch: BranchInfo) => {
+    async (
+      branch: BranchInfo,
+      options?: { skipDetachedWarning?: boolean },
+    ) => {
       if (!snapshot || branch.isCurrent || branchBusy || isSyncing) {
+        return;
+      }
+      if (repoStateInfo(snapshot.repoState).blocksOperations) {
+        setNotice(repoStateNotice(snapshot.repoState, "切换分支"));
         return;
       }
       if (!snapshot.workingTree.isClean) {
@@ -621,7 +728,19 @@ export default function App() {
         });
         return;
       }
+      if (
+        snapshot.head.detached &&
+        snapshot.detachedUnsaved &&
+        !options?.skipDetachedWarning
+      ) {
+        setDetachedSwitchTarget(branch);
+        return;
+      }
 
+      const leavingUnsavedDetached =
+        snapshot.head.detached && snapshot.detachedUnsaved;
+      const detachedSha = snapshot.head.shortOid;
+      setDetachedSwitchTarget(null);
       setBranchBusy(true);
       try {
         const next = await checkoutBranch(snapshot.path, branch.name);
@@ -631,11 +750,19 @@ export default function App() {
         setScope("worktree");
         setHistoryRefreshToken((token) => token + 1);
         refreshRefs();
-        setNotice({
-          tone: "success",
-          title: "已切换分支",
-          message: `当前分支：${branch.name}`,
-        });
+        setNotice(
+          leavingUnsavedDetached
+            ? {
+                tone: "warning",
+                title: "已切换分支",
+                message: `当前分支：${branch.name}；之前的游离 commit ${detachedSha ?? ""} 未关联分支，仍可通过 reflog 找回。`,
+              }
+            : {
+                tone: "success",
+                title: "已切换分支",
+                message: `当前分支：${branch.name}`,
+              },
+        );
       } catch (rawError) {
         reportError(rawError);
       } finally {
@@ -643,6 +770,21 @@ export default function App() {
       }
     },
     [adopt, branchBusy, isSyncing, refreshRefs, reportError, snapshot],
+  );
+
+  const handleDetachedBranchCreated = useCallback(
+    (branchName: string) => {
+      setDetachedBranchOpen(false);
+      setDetachedSwitchTarget(null);
+      refreshRefs();
+      void refreshAll();
+      setNotice({
+        tone: "success",
+        title: "分支已创建",
+        message: `游离 commit 已保存到 ${branchName}，当前分支已切换；RepoState 回到 Normal。`,
+      });
+    },
+    [refreshAll, refreshRefs],
   );
 
   const handleDeleteBranch = useCallback(async () => {
@@ -763,6 +905,35 @@ export default function App() {
     ],
   );
 
+  const handleUpstreamSaved = useCallback(
+    (branch: BranchInfo, remote: string, remoteBranch: string) => {
+      setUpstreamTarget(null);
+      refreshRefs();
+      void refreshAll();
+      setNotice({
+        tone: "success",
+        title: "Upstream 已更新",
+        message: `${branch.name} → ${remote}/${remoteBranch}；ahead/behind 已刷新。`,
+      });
+    },
+    [refreshAll, refreshRefs],
+  );
+
+  const handleSoftResetDone = useCallback(() => {
+    setSoftResetTarget(null);
+    setSelectedCommitOid(null);
+    setSelected(null);
+    setScope("worktree");
+    setHistoryRefreshToken((token) => token + 1);
+    refreshRefs();
+    void refreshAll();
+    setNotice({
+      tone: "success",
+      title: "已软回退",
+      message: "HEAD 已移动；被回退提交的变更保留在暂存区，文件修改未丢失。",
+    });
+  }, [refreshAll, refreshRefs]);
+
   const handleMergeBranch = useCallback(async (): Promise<boolean> => {
     if (!snapshot || !mergeTarget || branchBusy) {
       return false;
@@ -801,6 +972,125 @@ export default function App() {
     adopt,
     branchBusy,
     mergeTarget,
+    refreshRefs,
+    reportError,
+    snapshot,
+  ]);
+
+  const handleAbortMerge = useCallback(async () => {
+    if (!snapshot || isAbortingMerge) {
+      return;
+    }
+    setIsAbortingMerge(true);
+    try {
+      await mergeAbort(snapshot.path);
+      const next = await openRepository(snapshot.path);
+      adopt(next);
+      setMergeAbortOpen(false);
+      setSelected(null);
+      setSelectedCommitOid(null);
+      setScope("worktree");
+      setHistoryRefreshToken((token) => token + 1);
+      refreshRefs();
+      setNotice({
+        tone: "success",
+        title: "已中止 merge",
+        message: "工作区已恢复到合并前状态。",
+      });
+    } catch (rawError) {
+      reportError(rawError);
+    } finally {
+      setIsAbortingMerge(false);
+    }
+  }, [
+    adopt,
+    isAbortingMerge,
+    refreshRefs,
+    reportError,
+    snapshot,
+  ]);
+
+  const handleSquashMerge = useCallback(async (): Promise<boolean> => {
+    if (!snapshot || !mergeTarget || branchBusy) {
+      return false;
+    }
+    setBranchBusy(true);
+    const source = mergeTarget.name;
+    try {
+      const result = await mergeBranchSquash(snapshot.path, source);
+      adopt(result.snapshot);
+      setSelected(null);
+      setSelectedCommitOid(null);
+      setScope("worktree");
+      setHistoryRefreshToken((token) => token + 1);
+      refreshRefs();
+      setMergeTarget(null);
+
+      if (result.outcome === "noChanges") {
+        setNotice({
+          tone: "info",
+          title: "Squash 未产生变更",
+          message: `${source} 的内容已在当前工作区中，暂存区没有新增内容；无需提交，也没有创建任何提交。`,
+        });
+      } else if (result.outcome === "squashReady") {
+        setCommitInitialMessage(`Squash merge ${source}`);
+        setCommitOpen(true);
+        setNotice({
+          tone: "success",
+          title: "Squash 变更已暂存",
+          message: "变更已暂存，请提交以完成 squash merge。",
+        });
+      } else if (result.outcome === "conflict") {
+        setNotice({
+          tone: "warning",
+          title: "Squash 合并产生冲突",
+          message: `${result.conflicts.length} 个冲突文件；解决后提交以完成 Squash 合并，或中止本次 Squash。`,
+        });
+      }
+      return true;
+    } catch (rawError) {
+      reportError(rawError);
+      return false;
+    } finally {
+      setBranchBusy(false);
+    }
+  }, [
+    adopt,
+    branchBusy,
+    mergeTarget,
+    refreshRefs,
+    reportError,
+    snapshot,
+  ]);
+
+  const handleAbortSquash = useCallback(async () => {
+    if (!snapshot || isAbortingSquash) {
+      return;
+    }
+    setIsAbortingSquash(true);
+    try {
+      await squashMergeAbort(snapshot.path);
+      const next = await openRepository(snapshot.path);
+      adopt(next);
+      setSquashAbortOpen(false);
+      setSelected(null);
+      setSelectedCommitOid(null);
+      setScope("worktree");
+      setHistoryRefreshToken((token) => token + 1);
+      refreshRefs();
+      setNotice({
+        tone: "success",
+        title: "已中止 Squash 合并",
+        message: "冲突状态已清理，工作区恢复到 Squash 之前。",
+      });
+    } catch (rawError) {
+      reportError(rawError);
+    } finally {
+      setIsAbortingSquash(false);
+    }
+  }, [
+    adopt,
+    isAbortingSquash,
     refreshRefs,
     reportError,
     snapshot,
@@ -915,6 +1205,18 @@ export default function App() {
   const runSync = useCallback(
     async (action: SyncAction) => {
       if (!snapshot || syncAction || isMutating || branchBusy) {
+        return;
+      }
+      if (
+        action !== "fetch" &&
+        repoStateInfo(snapshot.repoState).blocksOperations
+      ) {
+        setNotice(
+          repoStateNotice(
+            snapshot.repoState,
+            action === "pull" ? "Pull" : "Push",
+          ),
+        );
         return;
       }
       setSyncAction(action);
@@ -1138,14 +1440,33 @@ export default function App() {
               onCreateBranch={() => setBranchCreateOpen(true)}
               onRestoreRemote={() => setRemoteBranchesOpen(true)}
               onRenameBranch={setBranchRenameTarget}
-              onMergeBranch={setMergeTarget}
+              onSetUpstream={setUpstreamTarget}
+              onMergeBranch={(branch) => {
+                if (repoStateInfo(snapshot.repoState).blocksOperations) {
+                  setNotice(repoStateNotice(snapshot.repoState, "合并分支"));
+                  return;
+                }
+                setMergeTarget(branch);
+              }}
               onManageTags={() => setTagsOpen(true)}
               onCheckoutBranch={(branch) => void handleCheckout(branch)}
-              onDeleteBranch={(branch) => setBranchDeleteTarget(branch)}
+              onDeleteBranch={(branch) => {
+                if (repoStateInfo(snapshot.repoState).blocksOperations) {
+                  setNotice(repoStateNotice(snapshot.repoState, "删除分支"));
+                  return;
+                }
+                setBranchDeleteTarget(branch);
+              }}
               onManageRemotes={() => setRemoteOpen(true)}
               onFetch={() => void runSync("fetch")}
               onPull={() => void runSync("pull")}
-              onPush={() => setPushOpen(true)}
+              onPush={() => {
+                if (repoStateInfo(snapshot.repoState).blocksOperations) {
+                  setNotice(repoStateNotice(snapshot.repoState, "Push"));
+                  return;
+                }
+                setPushOpen(true);
+              }}
               onReflog={() => setReflogOpen(true)}
             />
             <CommitHistory
@@ -1181,11 +1502,35 @@ export default function App() {
               onStage={handleStage}
               onUnstage={handleUnstage}
               onDiscard={handleDiscardRequest}
-              onOpenCommit={() => setCommitOpen(true)}
+              onOpenCommit={() => {
+                setCommitInitialMessage(null);
+                setCommitOpen(true);
+              }}
               onOpenAmend={() => setAmendOpen(true)}
+              onOpenEmptyCommit={() => setEmptyCommitOpen(true)}
+              onContinueMerge={() => {
+                setCommitInitialMessage(null);
+                setCommitOpen(true);
+              }}
+              onAbortMerge={() => setMergeAbortOpen(true)}
+              squashSource={snapshot.squashSource}
+              onAbortSquash={() => setSquashAbortOpen(true)}
+              shortSha={snapshot.head.shortOid}
+              detachedUnsaved={snapshot.detachedUnsaved}
+              branches={branches}
+              onCreateDetachedBranch={() => setDetachedBranchOpen(true)}
+              onSwitchBranch={(branch) => void handleCheckout(branch)}
+              onIgnoreFile={(file, tracked) => setIgnoreTarget({ file, tracked })}
               onOpenMergeTool={handleOpenMergeTool}
               onMarkResolved={handleMarkResolved}
               onRevertCommit={(oid) => setRevertTarget(oid)}
+              onSoftResetCommit={(oid) => {
+                if (repoStateInfo(snapshot.repoState).blocksOperations) {
+                  setNotice(repoStateNotice(snapshot.repoState, "软回退"));
+                  return;
+                }
+                setSoftResetTarget(oid);
+              }}
               revertInProgress={snapshot.revertInProgress}
               revertConflicts={snapshot.files.conflicted.length}
               revertBusy={revertBusy}
@@ -1232,10 +1577,18 @@ export default function App() {
           <CommitDialog
             open={commitOpen}
             snapshot={snapshot}
+            initialMessage={commitInitialMessage}
             onOpenChange={setCommitOpen}
             onCommitted={handleCommitted}
             onOpenRepositorySettings={() => setSettingsOpen(true)}
+            onCreateDetachedBranch={() => setDetachedBranchOpen(true)}
             onCommitAndPush={handleCommitAndPush}
+          />
+          <EmptyCommitDialog
+            open={emptyCommitOpen}
+            repoPath={snapshot.path}
+            onOpenChange={setEmptyCommitOpen}
+            onCommitted={handleEmptyCommitted}
           />
           <AmendCommitDialog
             open={amendOpen}
@@ -1312,6 +1665,50 @@ export default function App() {
             }}
             onConfirm={handleRenameBranch}
           />
+          <SetUpstreamDialog
+            open={upstreamTarget !== null}
+            repoPath={snapshot.path}
+            branch={upstreamTarget}
+            remotes={remotes}
+            onOpenChange={(open) => {
+              if (!open) setUpstreamTarget(null);
+            }}
+            onSaved={handleUpstreamSaved}
+          />
+          <SoftResetDialog
+            open={softResetTarget !== null}
+            repoPath={snapshot.path}
+            targetSha={softResetTarget}
+            onOpenChange={(open) => {
+              if (!open) setSoftResetTarget(null);
+            }}
+            onReset={handleSoftResetDone}
+          />
+          <DetachedBranchDialog
+            open={detachedBranchOpen}
+            repoPath={snapshot.path}
+            suggestedName={`detached-${snapshot.head.shortOid ?? "work"}`}
+            onOpenChange={setDetachedBranchOpen}
+            onCreated={handleDetachedBranchCreated}
+          />
+          <DetachedSwitchDialog
+            branch={detachedSwitchTarget}
+            currentSha={snapshot.head.shortOid}
+            onOpenChange={(open) => {
+              if (!open) setDetachedSwitchTarget(null);
+            }}
+            onCreateBranch={() => {
+              setDetachedSwitchTarget(null);
+              setDetachedBranchOpen(true);
+            }}
+            onSwitchAnyway={() => {
+              const target = detachedSwitchTarget;
+              setDetachedSwitchTarget(null);
+              if (target) {
+                void handleCheckout(target, { skipDetachedWarning: true });
+              }
+            }}
+          />
           <MergeBranchDialog
             branch={mergeTarget}
             currentBranch={snapshot.head.branch}
@@ -1319,6 +1716,23 @@ export default function App() {
               if (!open) setMergeTarget(null);
             }}
             onConfirm={handleMergeBranch}
+            onConfirmSquash={handleSquashMerge}
+          />
+          <MergeAbortDialog
+            open={mergeAbortOpen}
+            isAborting={isAbortingMerge}
+            onOpenChange={setMergeAbortOpen}
+            onConfirm={() => void handleAbortMerge()}
+          />
+          <MergeAbortDialog
+            open={squashAbortOpen}
+            isAborting={isAbortingSquash}
+            title="中止本次 Squash 合并？"
+            description="将放弃本次 Squash 合并的所有冲突解决进度，工作区恢复到 Squash 之前。"
+            note="中止使用 git reset --merge 清理冲突；不会自动切换分支、stash 或提交。"
+            confirmLabel="确认中止 Squash"
+            onOpenChange={setSquashAbortOpen}
+            onConfirm={() => void handleAbortSquash()}
           />
           <RemoteBranchDialog
             open={remoteBranchesOpen}
@@ -1377,6 +1791,30 @@ export default function App() {
         onFontScaleChange={ui.setFontScale}
       />
 
+      <AuthHelpDialog
+        open={authHelpOpen}
+        repoPath={snapshot?.path ?? null}
+        onOpenChange={setAuthHelpOpen}
+      />
+
+      <GitignoreDialog
+        open={ignoreTarget !== null}
+        repoPath={snapshot?.path ?? null}
+        file={ignoreTarget?.file ?? null}
+        tracked={ignoreTarget?.tracked ?? false}
+        onOpenChange={(open) => {
+          if (!open) setIgnoreTarget(null);
+        }}
+        onApplied={(message) => {
+          setNotice({
+            tone: "success",
+            title: "忽略规则已更新",
+            message,
+          });
+          void refreshAll();
+        }}
+      />
+
       {(notice || activeError) && (
         <div className="pointer-events-none fixed bottom-5 right-5 z-50 flex w-[min(390px,calc(100vw-2.5rem))] flex-col gap-2">
           {notice && (
@@ -1389,6 +1827,7 @@ export default function App() {
               <ErrorBanner
                 error={activeError}
                 onDismiss={dismissActiveError}
+                onOpenAuthHelp={() => setAuthHelpOpen(true)}
               />
             </div>
           )}

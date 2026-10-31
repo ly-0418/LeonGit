@@ -1,4 +1,4 @@
-import { Archive, Check, ChevronDown, ChevronRight, Loader2, Trash2, Upload } from "lucide-react";
+import { Archive, Check, ChevronDown, ChevronRight, Loader2, Trash2, TriangleAlert, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -12,15 +12,31 @@ import {
   toGitError,
 } from "@/lib/git-api";
 import { formatRelativeTime } from "@/lib/format";
-import type { GitError, StashEntry } from "@/types/git";
+import type { GitError, StashEntry, StashResult } from "@/types/git";
 
 interface StashPanelProps {
   repoPath: string;
+  conflictedCount: number;
   onChanged: () => void;
   onError: (error: unknown) => void;
 }
 
-export function StashPanel({ repoPath, onChanged, onError }: StashPanelProps) {
+function isStashResult(value: unknown): value is StashResult {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "outcome" in value &&
+    "conflicts" in value &&
+    "message" in value
+  );
+}
+
+export function StashPanel({
+  repoPath,
+  conflictedCount,
+  onChanged,
+  onError,
+}: StashPanelProps) {
   const [expanded, setExpanded] = useState(false);
   const [entries, setEntries] = useState<StashEntry[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -30,6 +46,7 @@ export function StashPanel({ repoPath, onChanged, onError }: StashPanelProps) {
   const [includeUntracked, setIncludeUntracked] = useState(true);
   const [restoreIndex, setRestoreIndex] = useState(true);
   const [dropTarget, setDropTarget] = useState<number | null>(null);
+  const [conflictMessage, setConflictMessage] = useState<string | null>(null);
   const repoRef = useRef(repoPath);
 
   useEffect(() => {
@@ -60,10 +77,17 @@ export function StashPanel({ repoPath, onChanged, onError }: StashPanelProps) {
     setEntries([]);
     setError(null);
     setDropTarget(null);
+    setConflictMessage(null);
     setIsBusy(false);
     setIsLoading(true);
     void reload();
   }, [repoPath]);
+
+  useEffect(() => {
+    if (conflictedCount === 0) {
+      setConflictMessage(null);
+    }
+  }, [conflictedCount]);
 
   useEffect(() => {
     if (expanded) {
@@ -71,14 +95,21 @@ export function StashPanel({ repoPath, onChanged, onError }: StashPanelProps) {
     }
   }, [expanded]);
 
-  const run = async (action: () => Promise<void>) => {
+  const run = async (action: () => Promise<unknown>) => {
     if (isBusy) {
       return;
     }
     const target = repoPath;
     setIsBusy(true);
     try {
-      await action();
+      const result = await action();
+      if (repoRef.current === target) {
+        setConflictMessage(
+          isStashResult(result) && result.outcome === "conflict"
+            ? result.message
+            : null,
+        );
+      }
       await reload();
       if (repoRef.current === target) {
         onChanged();
@@ -127,6 +158,23 @@ export function StashPanel({ repoPath, onChanged, onError }: StashPanelProps) {
           <ChevronRight className="size-3.5 text-muted-foreground/35" />
         )}
       </button>
+
+      {conflictMessage && conflictedCount > 0 && (
+        <div
+          role="status"
+          className="flex items-start gap-2 border-t border-amber-500/15 bg-amber-500/[0.055] px-5 py-2.5 text-[9.5px] leading-relaxed text-amber-700/85 dark:text-amber-300/80"
+        >
+          <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+          <div>
+            <div className="font-medium">stash 应用产生冲突</div>
+            <p className="mt-0.5 opacity-85">{conflictMessage}</p>
+            <p className="mt-0.5 text-[9px] opacity-65">
+              冲突文件已进入工作区“冲突”分组；可打开外部合并工具或标记已解决。stash
+              条目仍保留，解决冲突后可手动 drop；不会自动 drop，也不会自动 abort。
+            </p>
+          </div>
+        </div>
+      )}
 
       {expanded && (
         <div className="max-h-[38vh] overflow-y-auto border-t border-[var(--line-subtle)] px-5 pb-4 pt-3">

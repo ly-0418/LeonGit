@@ -4,14 +4,25 @@ use super::command::run_git_checked;
 use super::error::GitError;
 use super::types::{DiffLine, DiffLineKind, DiffScope, FileDiff};
 
-const MAX_DIFF_BYTES: usize = 1_500_000;
-const MAX_DIFF_LINES: usize = 6_000;
+const DEFAULT_DIFF_LINES: u32 = 5_000;
+const MAX_DIFF_PAGE: u32 = 10_000;
 
 pub(crate) fn read(
     worktree: &Path,
     path: &str,
     original_path: Option<&str>,
     scope: DiffScope,
+) -> Result<FileDiff, GitError> {
+    read_window(worktree, path, original_path, scope, 0, DEFAULT_DIFF_LINES)
+}
+
+pub(crate) fn read_window(
+    worktree: &Path,
+    path: &str,
+    original_path: Option<&str>,
+    scope: DiffScope,
+    offset: u32,
+    limit: u32,
 ) -> Result<FileDiff, GitError> {
     let path = validate_relative_path(path, "文件路径")?;
     let original_path = original_path
@@ -37,7 +48,7 @@ pub(crate) fn read(
     }
 
     let stdout = run_git_checked(worktree, args)?;
-    finish(path, original_path, stdout)
+    finish(path, original_path, stdout, offset, limit)
 }
 
 pub(crate) fn read_commit(
@@ -45,6 +56,17 @@ pub(crate) fn read_commit(
     oid: &str,
     path: &str,
     original_path: Option<&str>,
+) -> Result<FileDiff, GitError> {
+    read_commit_window(worktree, oid, path, original_path, 0, DEFAULT_DIFF_LINES)
+}
+
+pub(crate) fn read_commit_window(
+    worktree: &Path,
+    oid: &str,
+    path: &str,
+    original_path: Option<&str>,
+    offset: u32,
+    limit: u32,
 ) -> Result<FileDiff, GitError> {
     if oid.is_empty()
         || oid.len() > 64
@@ -74,50 +96,22 @@ pub(crate) fn read_commit(
     }
 
     let stdout = run_git_checked(worktree, args)?;
-    finish(path, original_path, stdout)
+    finish(path, original_path, stdout, offset, limit)
 }
 
 fn finish(
     path: String,
     original_path: Option<String>,
     stdout: Vec<u8>,
+    offset: u32,
+    limit: u32,
 ) -> Result<FileDiff, GitError> {
-    let truncated_by_bytes = stdout.len() > MAX_DIFF_BYTES;
-    let visible = if truncated_by_bytes {
-        &stdout[..MAX_DIFF_BYTES]
-    } else {
-        stdout.as_slice()
-    };
-
-    if !truncated_by_bytes && std::str::from_utf8(visible).is_err() {
-        return Ok(FileDiff {
-            path,
-            original_path,
-            lines: vec![DiffLine {
-                kind: DiffLineKind::Meta,
-                content: "文件包含非 UTF-8 字节，已禁用 hunk 操作以避免误写。".to_owned(),
-                old_line: None,
-                new_line: None,
-            }],
-            is_binary: true,
-            truncated: false,
-        });
-    }
-
-    let (mut lines, is_binary) = parse(&String::from_utf8_lossy(visible));
-    let mut truncated = truncated_by_bytes;
-    if lines.len() > MAX_DIFF_LINES {
-        lines.truncate(MAX_DIFF_LINES);
-        truncated = true;
-    }
-    if truncated {
-        lines.push(DiffLine {
-            kind: DiffLineKind::Meta,
-            content: "… diff 输出过长，已截断。".to_owned(),
-            old_line: None,
-            new_line: None,
-        });
-    }
+    let text = String::from_utf8_lossy(&stdout);
+    let has_invalid_utf8 = std::str::from_utf8(&stdout).is_err();
+    let offset = offset as usize;
+    let limit = (limit as usize).clamp(1, MAX_DIFF_PAGE as usize);
+    let (lines, is_binary, total_lines) = parse_window(&text, offset, limit);
+    let truncated = offset.saturating_add(lines.len()) < total_lines;
 
     Ok(FileDiff {
         path,
@@ -125,6 +119,8 @@ fn finish(
         lines,
         is_binary,
         truncated,
+        has_invalid_utf8,
+        total_lines: total_lines.min(u32::MAX as usize) as u32,
     })
 }
 
@@ -155,14 +151,23 @@ pub(crate) fn validate_relative_path(path: &str, label: &str) -> Result<String, 
     Ok(path.replace('\\', "/"))
 }
 
+#[cfg(test)]
 fn parse(text: &str) -> (Vec<DiffLine>, bool) {
+    let (lines, binary, _) = parse_window(text, 0, usize::MAX);
+    (lines, binary)
+}
+
+fn parse_window(text: &str, offset: usize, limit: usize) -> (Vec<DiffLine>, bool, usize) {
+    let total_lines = text.lines().count();
+    let end = offset.saturating_add(limit);
     let mut lines = Vec::new();
     let mut in_hunk = false;
     let mut is_binary = false;
     let mut old_cursor = 0u32;
     let mut new_cursor = 0u32;
 
-    for raw in text.lines() {
+    for (index, raw) in text.lines().enumerate() {
+        let visible = index >= offset && index < end;
         let line = raw.strip_suffix('\r').unwrap_or(raw);
 
         if line.starts_with("@@") {
@@ -171,50 +176,60 @@ fn parse(text: &str) -> (Vec<DiffLine>, bool) {
                 old_cursor = old_start;
                 new_cursor = new_start;
             }
-            lines.push(DiffLine {
-                kind: DiffLineKind::Hunk,
-                content: line.to_owned(),
-                old_line: None,
-                new_line: None,
-            });
+            if visible {
+                lines.push(DiffLine {
+                    kind: DiffLineKind::Hunk,
+                    content: line.to_owned(),
+                    old_line: None,
+                    new_line: None,
+                });
+            }
             continue;
         }
 
         if in_hunk {
             match line.chars().next() {
                 Some('+') => {
-                    lines.push(DiffLine {
-                        kind: DiffLineKind::Addition,
-                        content: line[1..].to_owned(),
-                        old_line: None,
-                        new_line: Some(new_cursor),
-                    });
+                    if visible {
+                        lines.push(DiffLine {
+                            kind: DiffLineKind::Addition,
+                            content: line[1..].to_owned(),
+                            old_line: None,
+                            new_line: Some(new_cursor),
+                        });
+                    }
                     new_cursor = new_cursor.saturating_add(1);
                     continue;
                 }
                 Some('-') => {
-                    lines.push(DiffLine {
-                        kind: DiffLineKind::Deletion,
-                        content: line[1..].to_owned(),
-                        old_line: Some(old_cursor),
-                        new_line: None,
-                    });
+                    if visible {
+                        lines.push(DiffLine {
+                            kind: DiffLineKind::Deletion,
+                            content: line[1..].to_owned(),
+                            old_line: Some(old_cursor),
+                            new_line: None,
+                        });
+                    }
                     old_cursor = old_cursor.saturating_add(1);
                     continue;
                 }
                 Some(' ') => {
-                    lines.push(DiffLine {
-                        kind: DiffLineKind::Context,
-                        content: line[1..].to_owned(),
-                        old_line: Some(old_cursor),
-                        new_line: Some(new_cursor),
-                    });
+                    if visible {
+                        lines.push(DiffLine {
+                            kind: DiffLineKind::Context,
+                            content: line[1..].to_owned(),
+                            old_line: Some(old_cursor),
+                            new_line: Some(new_cursor),
+                        });
+                    }
                     old_cursor = old_cursor.saturating_add(1);
                     new_cursor = new_cursor.saturating_add(1);
                     continue;
                 }
                 Some('\\') => {
-                    lines.push(meta_line(line));
+                    if visible {
+                        lines.push(meta_line(line));
+                    }
                     continue;
                 }
                 _ => {
@@ -223,13 +238,18 @@ fn parse(text: &str) -> (Vec<DiffLine>, bool) {
             }
         }
 
-        if line.starts_with("Binary files ") || line.starts_with("GIT binary patch") {
+        if line.starts_with("Binary files ")
+            || line.starts_with("GIT binary patch")
+            || line == "-\t-"
+        {
             is_binary = true;
         }
-        lines.push(meta_line(line));
+        if visible {
+            lines.push(meta_line(line));
+        }
     }
 
-    (lines, is_binary)
+    (lines, is_binary, total_lines)
 }
 
 fn parse_hunk_ranges(line: &str) -> Option<(u32, u32)> {
@@ -314,17 +334,64 @@ index 111..222 100644
     }
 
     #[test]
-    fn marks_invalid_utf8_diff_as_binary() {
+    fn keeps_invalid_utf8_visible_with_replacement_characters() {
         let diff = finish(
             "binary-ish.txt".to_owned(),
             None,
-            b"diff --git a/x b/x\n\xff\xfe".to_vec(),
+            b"diff --git a/x b/x\n\xff\xfe\n".to_vec(),
+            0,
+            DEFAULT_DIFF_LINES,
         )
         .expect("diff");
-        assert!(diff.is_binary);
+        assert!(!diff.is_binary);
+        assert!(diff.has_invalid_utf8);
         assert!(diff
             .lines
             .iter()
-            .any(|line| line.content.contains("非 UTF-8")));
+            .any(|line| line.content.contains('\u{FFFD}')));
+    }
+
+    #[test]
+    fn truncates_large_diffs_and_reports_total_lines() {
+        let mut text = String::from("diff --git a/big.txt b/big.txt\n@@ -1 +1 @@\n");
+        for _ in 0..5_100 {
+            text.push_str("+line\n");
+        }
+        let diff = finish(
+            "big.txt".to_owned(),
+            None,
+            text.into_bytes(),
+            0,
+            DEFAULT_DIFF_LINES,
+        )
+        .expect("diff");
+        assert!(diff.truncated);
+        assert_eq!(diff.lines.len(), DEFAULT_DIFF_LINES as usize);
+        assert!(diff.total_lines > DEFAULT_DIFF_LINES);
+    }
+
+    #[test]
+    fn page_offset_preserves_hunk_line_numbers() {
+        let text = "\
+diff --git a/a.txt b/a.txt
+@@ -1 +1,3 @@
+ one
++two
++three
+";
+        let (first, _, total) = parse_window(text, 0, 3);
+        let (context, _, _) = parse_window(text, 2, 1);
+        let (second, _, _) = parse_window(text, 3, 3);
+        assert_eq!(total, 5);
+        assert_eq!(first.len(), 3);
+        assert_eq!(context.len(), 1);
+        assert_eq!(context[0].kind, DiffLineKind::Context);
+        assert_eq!(context[0].old_line, Some(1));
+        assert_eq!(context[0].new_line, Some(1));
+        assert_eq!(second.len(), 2);
+        assert_eq!(second[0].kind, DiffLineKind::Addition);
+        assert_eq!(second[0].new_line, Some(2));
+        assert_eq!(second[1].kind, DiffLineKind::Addition);
+        assert_eq!(second[1].new_line, Some(3));
     }
 }

@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use super::command::{run_git, run_git_checked, text_output};
 use super::error::GitError;
+use super::repo_state::{self, RepoState};
 use super::status;
 use super::types::{HeadState, RepositorySnapshot};
 
@@ -89,6 +90,23 @@ pub(crate) fn snapshot_at_root(root: &Path) -> Result<RepositorySnapshot, GitErr
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| root.display().to_string());
 
+    let repo_state = repo_state::detect(root)?;
+    let detached_unsaved = if repo_state == RepoState::DetachedHead {
+        detached_is_unsaved(root)?
+    } else {
+        false
+    };
+
+    let mut squash_source = repo_state::read_squash_source(root)?;
+    if squash_source.is_some() {
+        // The squash result is committed or was discarded from outside the
+        // client; drop the marker so the banner cannot outlive the conflict.
+        if status.summary.conflicted == 0 && status.files.staged.is_empty() {
+            repo_state::clear_squash_source(root)?;
+            squash_source = None;
+        }
+    }
+
     Ok(RepositorySnapshot {
         path: root.display().to_string(),
         name,
@@ -99,26 +117,28 @@ pub(crate) fn snapshot_at_root(root: &Path) -> Result<RepositorySnapshot, GitErr
         files: status.files,
         working_tree: status.summary,
         commit_count,
-        revert_in_progress: revert_in_progress(root)?,
+        repo_state,
+        detached_unsaved,
+        revert_in_progress: repo_state == RepoState::Reverting,
+        squash_source,
     })
 }
 
-pub(crate) fn revert_in_progress(root: &Path) -> Result<bool, GitError> {
-    let output = run_git(root, ["rev-parse", "--git-path", "REVERT_HEAD"])?;
+fn detached_is_unsaved(root: &Path) -> Result<bool, GitError> {
+    let output = run_git(
+        root,
+        [
+            "for-each-ref",
+            "--contains",
+            "HEAD",
+            "--format=%(refname:short)",
+            "refs/heads",
+        ],
+    )?;
     if !output.status.success() {
-        return Ok(false);
+        return Err(super::command::output_failure(&output));
     }
-    let git_path = text_output(&output.stdout);
-    if git_path.is_empty() {
-        return Ok(false);
-    }
-    let candidate = PathBuf::from(git_path);
-    let path = if candidate.is_absolute() {
-        candidate
-    } else {
-        root.join(candidate)
-    };
-    Ok(path.exists())
+    Ok(text_output(&output.stdout).trim().is_empty())
 }
 
 /// Resolves a user-selected folder to the canonical repository worktree root.

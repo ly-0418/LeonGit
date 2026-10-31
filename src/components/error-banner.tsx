@@ -8,6 +8,8 @@ const ERROR_TITLES: Record<GitErrorKind, string> = {
   invalidPath: "路径不可用",
   invalidInput: "输入无效",
   identityMissing: "提交者身份未配置",
+  emptyStagingArea: "没有已暂存的变更",
+  emptyCommitMessage: "提交消息不能为空",
   worktreeDirty: "有未提交修改",
   commandFailed: "Git 操作失败",
   timeout: "连接超时",
@@ -18,9 +20,34 @@ const ERROR_TITLES: Record<GitErrorKind, string> = {
 interface ErrorBannerProps {
   error: GitError;
   onDismiss: () => void;
+  onOpenAuthHelp?: () => void;
 }
 
-export function ErrorBanner({ error, onDismiss }: ErrorBannerProps) {
+const AUTH_OUTCOMES = new Set([
+  "authFailed",
+  "credentialHelperMissing",
+  "sshKeyNotLoaded",
+  "hostKeyUnknown",
+]);
+
+const AUTH_TITLES: Record<string, string> = {
+  authFailed: "远程认证失败",
+  credentialHelperMissing: "未配置 Git 凭据助手",
+  sshKeyNotLoaded: "SSH key 未加载",
+  hostKeyUnknown: "SSH 主机指纹未确认",
+};
+
+export function ErrorBanner({
+  error,
+  onDismiss,
+  onOpenAuthHelp,
+}: ErrorBannerProps) {
+  const showAuthHelp =
+    Boolean(onOpenAuthHelp) &&
+    Boolean(error.fetchOutcome && AUTH_OUTCOMES.has(error.fetchOutcome));
+  const title =
+    (error.fetchOutcome && AUTH_TITLES[error.fetchOutcome]) ||
+    ERROR_TITLES[error.kind];
   return (
     <div
       role="alert"
@@ -33,11 +60,20 @@ export function ErrorBanner({ error, onDismiss }: ErrorBannerProps) {
         </div>
         <div className="min-w-0 flex-1">
           <div className="text-[12px] font-medium text-foreground/85">
-            {ERROR_TITLES[error.kind]}
+            {title}
           </div>
           <p className="mt-1 break-words text-[10.5px] leading-relaxed text-muted-foreground/72">
             {error.message}
           </p>
+          {showAuthHelp && (
+            <button
+              type="button"
+              onClick={onOpenAuthHelp}
+              className="mt-2 rounded-md border border-[var(--line)] bg-[var(--surface-subtle)] px-2 py-1 text-[9px] font-medium text-foreground/70 outline-none transition-colors hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              查看凭据排查
+            </button>
+          )}
         </div>
         <button
           type="button"

@@ -1,9 +1,15 @@
 import { CommitDetail } from "@/components/commit-detail";
 import { DiffView } from "@/components/diff-view";
+import { RepoStateBanner } from "@/components/repo-state-banner";
 import { RevertBanner } from "@/components/revert-banner";
 import { WorkingTreeOverview } from "@/components/working-tree-overview";
 import type { SelectedFile } from "@/hooks/use-file-diff";
-import type { DiffScope, RepositorySnapshot, StatusFile } from "@/types/git";
+import type {
+  BranchInfo,
+  DiffScope,
+  RepositorySnapshot,
+  StatusFile,
+} from "@/types/git";
 
 interface DetailsPanelProps {
   snapshot: RepositorySnapshot;
@@ -32,9 +38,21 @@ interface DetailsPanelProps {
   onDiscard: (file: StatusFile) => void;
   onOpenCommit: () => void;
   onOpenAmend: () => void;
+  onOpenEmptyCommit: () => void;
+  onContinueMerge: () => void;
+  onAbortMerge: () => void;
+  squashSource: string | null;
+  onAbortSquash: () => void;
+  shortSha: string | null;
+  detachedUnsaved: boolean;
+  branches: BranchInfo[];
+  onCreateDetachedBranch: () => void;
+  onSwitchBranch: (branch: BranchInfo) => void;
+  onIgnoreFile: (file: StatusFile, tracked: boolean) => void;
   onOpenMergeTool: (file: StatusFile) => void;
   onMarkResolved: (file: StatusFile) => void;
   onRevertCommit: (oid: string) => void;
+  onSoftResetCommit: (oid: string) => void;
   revertInProgress: boolean;
   revertConflicts: number;
   revertBusy: boolean;
@@ -69,9 +87,21 @@ export function DetailsPanel({
   onDiscard,
   onOpenCommit,
   onOpenAmend,
+  onOpenEmptyCommit,
+  onContinueMerge,
+  onAbortMerge,
+  squashSource,
+  onAbortSquash,
+  shortSha,
+  detachedUnsaved,
+  branches,
+  onCreateDetachedBranch,
+  onSwitchBranch,
+  onIgnoreFile,
   onOpenMergeTool,
   onMarkResolved,
   onRevertCommit,
+  onSoftResetCommit,
   revertInProgress,
   revertConflicts,
   revertBusy,
@@ -85,6 +115,25 @@ export function DetailsPanel({
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_70%_48%_at_85%_0%,rgba(232,182,102,0.04),transparent_65%)]"
       />
       <div className="relative flex h-full min-h-0 flex-col">
+        {(snapshot.repoState !== "normal" ||
+          snapshot.files.conflicted.length > 0) &&
+          snapshot.repoState !== "reverting" && (
+            <div className="shrink-0 px-5 pt-4">
+              <RepoStateBanner
+                state={snapshot.repoState}
+                conflicted={snapshot.files.conflicted.length}
+                squashSource={squashSource}
+                shortSha={shortSha}
+                detachedUnsaved={detachedUnsaved}
+                branches={branches}
+                onContinueMerge={onContinueMerge}
+                onAbortMerge={onAbortMerge}
+                onAbortSquash={onAbortSquash}
+                onCreateDetachedBranch={onCreateDetachedBranch}
+                onSwitchBranch={onSwitchBranch}
+              />
+            </div>
+          )}
         {revertInProgress && (
           <RevertBanner
             conflicts={revertConflicts}
@@ -99,6 +148,7 @@ export function DetailsPanel({
             oid={selectedCommitOid}
             onBack={onClearCommit}
             onRevert={onRevertCommit}
+            onSoftReset={onSoftResetCommit}
           />
         ) : selected ? (
           <DiffView
@@ -131,6 +181,8 @@ export function DetailsPanel({
             onDiscard={onDiscard}
             onOpenCommit={onOpenCommit}
             onOpenAmend={onOpenAmend}
+            onOpenEmptyCommit={onOpenEmptyCommit}
+            onIgnore={onIgnoreFile}
             onOpenMergeTool={onOpenMergeTool}
             onMarkResolved={onMarkResolved}
           />
