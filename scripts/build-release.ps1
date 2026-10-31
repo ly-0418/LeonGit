@@ -33,8 +33,10 @@ try {
     if (-not $setup) { throw 'missing NSIS installer; check the bundle configuration.' }
 
     New-Item -ItemType Directory -Force -Path $release | Out-Null
-    $portableOut = Join-Path $release ("LeonGit-" + $version + "-portable.exe")
-    $setupOut = Join-Path $release ("LeonGit-" + $version + "-setup.exe")
+    # Stable names: the README download link points at release/LeonGit-setup.exe
+    # and must keep working across versions.
+    $portableOut = Join-Path $release 'LeonGit-portable.exe'
+    $setupOut = Join-Path $release 'LeonGit-setup.exe'
     Copy-Item $exe $portableOut -Force
     Copy-Item $setup.FullName $setupOut -Force
 

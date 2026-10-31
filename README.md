@@ -4,6 +4,16 @@
 
 ![Stage 5 亮色工作区](docs/stage-5-light.png)
 
+## 下载安装（Windows）
+
+[**⬇ 下载 LeonGit 安装包（LeonGit-setup.exe）**](release/LeonGit-setup.exe?raw=true)
+
+- 适用于 Windows 10/11；NSIS 安装包，按当前用户安装，不内置 WebView2 运行时（系统一般已自带）。
+- 安装包未做代码签名，Windows SmartScreen 可能提示「未知发布者」，选择「更多信息 → 仍要运行」即可。
+- 仓库中始终使用同一个文件名，每次发布直接覆盖更新；安装后的版本号可在 exe 文件属性中查看。
+- 仓库只保留安装包；需要免安装版本时，在本地执行 `scripts\build-release.ps1` 生成 `release/LeonGit-portable.exe`。
+- 若上方链接没有直接开始下载，可用备用直链：<https://github.com/ly-0418/LeonGit/raw/master/release/LeonGit-setup.exe>。
+
 **当前阶段：V2 修补 — detached HEAD 完整交互**
 
 - Tauri 2 + Rust
@@ -188,6 +198,8 @@ V2 修补：detached HEAD：
 - force push
 
 ## 安装与启动
+
+直接使用安装包见上方「下载安装」；以下为从源码启动与构建。
 
 要求：
 
@@ -393,7 +405,7 @@ cargo tauri build --no-bundle
 
 ## 本地分支 upstream
 
-- 分支列表每行显示当前 upstream（如 `↗ origin/main`）；没有 upstream 时不显示。
+- 分支列表改为两行：第一行只放分支名（独占整行宽度，避免被 upstream / 未合并 / ahead-behind 挤压），第二行放 upstream（如 `↗ origin/main`，未设置时显示灰色占位）、未合并标记、ahead/behind 与悬停操作图标。
 - 分支行操作图标菜单提供“修改 upstream”，打开独立弹框。
 - 弹框：
   - 下拉选择远程（复用 V1 `list_remotes`）；
@@ -721,7 +733,7 @@ pnpm build:portable
 powershell -ExecutionPolicy Bypass -File scripts\build-release.ps1
 ```
 
-产物固定在 `release/`：`LeonGit-<version>-portable.exe`、`LeonGit-<version>-setup.exe`，同目录的 `build-info.txt` 记录构建时间、commit、文件大小与 SHA256；`release/` 已被 `.gitignore` 忽略。加 `-SkipTests` 可跳过构建前的 Rust 测试。
+产物固定在 `release/`：`LeonGit-portable.exe`、`LeonGit-setup.exe`（文件名不含版本号，README 下载链接始终有效），同目录的 `build-info.txt` 记录构建时间、commit、文件大小与 SHA256。`release/LeonGit-setup.exe` 会入库以便 GitHub 直接下载，其余构建产物被 `.gitignore` 忽略；加 `-SkipTests` 可跳过构建前的 Rust 测试。
 
 打包与便携数据路径见 [docs/windows-packaging.md](docs/windows-packaging.md)。
 

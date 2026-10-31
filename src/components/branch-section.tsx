@@ -170,19 +170,21 @@ export function BranchSection({
             <div
               key={branch.name}
               className={cn(
-                "group flex items-center rounded-lg transition-colors",
+                "group rounded-lg transition-colors",
                 branch.isCurrent
                   ? "bg-brand/[0.055]"
                   : "hover:bg-[var(--surface-muted)]",
               )}
             >
+              {/* Branch name keeps a full row of its own so long names are not
+                  squeezed by upstream text, badges or hover actions. */}
               <button
                 type="button"
                 onClick={() => {
                   if (!branch.isCurrent) onCheckout(branch);
                 }}
                 disabled={isBusy || branch.isCurrent}
-                className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left outline-none disabled:cursor-default"
+                className="flex w-full min-w-0 items-center gap-2 px-2 pt-1.5 text-left outline-none disabled:cursor-default"
                 title={
                   branch.isCurrent
                     ? `当前分支 ${branch.name}`
@@ -204,14 +206,36 @@ export function BranchSection({
                 >
                   {branch.name}
                 </span>
-                {branch.upstream && (
-                  <span
-                    className="max-w-[88px] shrink-0 truncate font-mono text-[7.5px] text-muted-foreground/30"
-                    title={`upstream: ${branch.upstream}`}
-                  >
-                    ↗ {branch.upstream}
-                  </span>
+              </button>
+
+              <div
+                className={cn(
+                  "flex items-center gap-1.5 pb-1.5 pl-7 pr-1",
+                  !branch.isCurrent && !isBusy && "cursor-pointer",
                 )}
+                onClick={() => {
+                  if (!branch.isCurrent && !isBusy) onCheckout(branch);
+                }}
+              >
+                <span
+                  className="min-w-0 flex-1 truncate font-mono text-[7.5px] leading-3"
+                  title={
+                    branch.upstream
+                      ? `upstream: ${branch.upstream}`
+                      : "未设置 upstream"
+                  }
+                >
+                  {branch.upstream ? (
+                    <span className="text-muted-foreground/35">
+                      ↗ {branch.upstream}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground/20">
+                      未设置 upstream
+                    </span>
+                  )}
+                </span>
+
                 {!branch.isMerged && !branch.isCurrent && (
                   <span
                     className="shrink-0 rounded-full border border-rose/15 bg-rose/[0.04] px-1 text-[7px] text-rose/55"
@@ -236,75 +260,80 @@ export function BranchSection({
                     )}
                   </span>
                 )}
-              </button>
 
-              {!branch.isCurrent && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={() => onMerge(branch)}
-                      disabled={isBusy}
-                      className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground/15 opacity-0 outline-none transition-opacity hover:bg-brand/[0.07] hover:text-brand/65 focus-visible:opacity-100 group-hover:opacity-100 disabled:pointer-events-none"
-                      aria-label={`合并分支 ${branch.name}`}
-                    >
-                      <GitMerge className="size-3" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent>合并到当前分支</TooltipContent>
-                </Tooltip>
-              )}
+                <div
+                  className="pointer-events-none flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity focus-within:pointer-events-auto focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  {!branch.isCurrent && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={() => onMerge(branch)}
+                          disabled={isBusy}
+                          className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground/15 outline-none transition-colors hover:bg-brand/[0.07] hover:text-brand/65 disabled:pointer-events-none"
+                          aria-label={`合并分支 ${branch.name}`}
+                        >
+                          <GitMerge className="size-3" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent>合并到当前分支</TooltipContent>
+                    </Tooltip>
+                  )}
 
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => onSetUpstream(branch)}
-                    disabled={isBusy}
-                    className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground/15 opacity-0 outline-none transition-opacity hover:bg-brand/[0.07] hover:text-brand/65 focus-visible:opacity-100 group-hover:opacity-100 disabled:pointer-events-none"
-                    aria-label={`修改 ${branch.name} 的 upstream`}
-                  >
-                    <Link2 className="size-3" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent>修改 upstream</TooltipContent>
-              </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={() => onSetUpstream(branch)}
+                        disabled={isBusy}
+                        className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground/15 outline-none transition-colors hover:bg-brand/[0.07] hover:text-brand/65 disabled:pointer-events-none"
+                        aria-label={`修改 ${branch.name} 的 upstream`}
+                      >
+                        <Link2 className="size-3" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>修改 upstream</TooltipContent>
+                  </Tooltip>
 
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => onRename(branch)}
-                    disabled={isBusy}
-                    className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground/15 opacity-0 outline-none transition-opacity hover:bg-[var(--surface-hover)] hover:text-foreground/65 focus-visible:opacity-100 group-hover:opacity-100 disabled:pointer-events-none"
-                    aria-label={`重命名分支 ${branch.name}`}
-                  >
-                    <Pencil className="size-3" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent>重命名分支</TooltipContent>
-              </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={() => onRename(branch)}
+                        disabled={isBusy}
+                        className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground/15 outline-none transition-colors hover:bg-[var(--surface-hover)] hover:text-foreground/65 disabled:pointer-events-none"
+                        aria-label={`重命名分支 ${branch.name}`}
+                      >
+                        <Pencil className="size-3" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>重命名分支</TooltipContent>
+                  </Tooltip>
 
-              {!branch.isCurrent && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={() => onDelete(branch)}
-                      disabled={isBusy}
-                      className="mr-1 grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground/15 opacity-0 outline-none transition-opacity hover:bg-rose/[0.07] hover:text-rose/65 focus-visible:opacity-100 group-hover:opacity-100 disabled:pointer-events-none"
-                      aria-label={`删除分支 ${branch.name}`}
-                    >
-                      {isBusy ? (
-                        <Loader2 className="size-3 animate-spin" />
-                      ) : (
-                        <Trash2 className="size-3" />
-                      )}
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent>删除本地分支</TooltipContent>
-                </Tooltip>
-              )}
+                  {!branch.isCurrent && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={() => onDelete(branch)}
+                          disabled={isBusy}
+                          className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground/15 outline-none transition-colors hover:bg-rose/[0.07] hover:text-rose/65 disabled:pointer-events-none"
+                          aria-label={`删除分支 ${branch.name}`}
+                        >
+                          {isBusy ? (
+                            <Loader2 className="size-3 animate-spin" />
+                          ) : (
+                            <Trash2 className="size-3" />
+                          )}
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent>删除本地分支</TooltipContent>
+                    </Tooltip>
+                  )}
+                </div>
+              </div>
             </div>
           ))
         )}

@@ -14,7 +14,9 @@ Data
 WebView2Data
 
 # Local acceptance builds produced by scripts/build-release.ps1.
-/release/
+# Only the installer is tracked so the README link works after pushing.
+/release/*
+!/release/LeonGit-setup.exe
 
 .DS_Store
 Thumbs.db
